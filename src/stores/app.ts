@@ -17,6 +17,8 @@ import type {
   PlayerAction,
 } from "@/domain/types";
 import { gameRepository } from "@/persistence/repository";
+import { DEFAULT_GAME_SETTINGS, type GameSettings } from "@/domain/settings";
+import { configureAudio, playDecisionSound } from "@/services/audio";
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -34,6 +36,7 @@ export const useAppStore = defineStore("app", () => {
   const accounts = ref<AccountProfile[]>([]);
   const session = ref<GameSession | null>(null);
   const saveState = ref<"saved" | "saving" | "error">("saved");
+  const settings = ref<GameSettings>({ ...DEFAULT_GAME_SETTINGS });
 
   const currentPlayer = computed(() =>
     session.value ? getCurrentPlayer(session.value) : null,
@@ -60,6 +63,8 @@ export const useAppStore = defineStore("app", () => {
     busy.value = true;
     try {
       account.value = await gameRepository.initialize();
+      settings.value = await gameRepository.loadSettings(account.value.id);
+      configureAudio(settings.value);
       await refreshAccounts();
       session.value = await gameRepository.loadActiveSession(account.value.id);
       initialized.value = true;
@@ -73,6 +78,8 @@ export const useAppStore = defineStore("app", () => {
 
   async function createAccount(name: string): Promise<void> {
     account.value = await gameRepository.createAccount(name);
+    settings.value = await gameRepository.loadSettings(account.value.id);
+    configureAudio(settings.value);
     session.value = null;
     await refreshAccounts();
   }
@@ -80,6 +87,8 @@ export const useAppStore = defineStore("app", () => {
   async function switchAccount(accountId: string): Promise<void> {
     if (account.value?.id === accountId) return;
     account.value = await gameRepository.switchAccount(accountId);
+    settings.value = await gameRepository.loadSettings(accountId);
+    configureAudio(settings.value);
     session.value = await gameRepository.loadActiveSession(accountId);
     await refreshAccounts();
     if (session.value) queueTask(continueAiTurns);
@@ -112,6 +121,15 @@ export const useAppStore = defineStore("app", () => {
     await refreshAccounts();
   }
 
+  async function updateSettings(updates: Partial<GameSettings>): Promise<void> {
+    if (!account.value) return;
+    settings.value = await gameRepository.saveSettings(
+      account.value.id,
+      updates,
+    );
+    configureAudio(settings.value);
+  }
+
   async function exportCurrentAccount(): Promise<string> {
     if (!account.value) throw new Error("账号尚未初始化");
     return gameRepository.exportAccount(account.value.id);
@@ -122,6 +140,8 @@ export const useAppStore = defineStore("app", () => {
     name: string,
   ): Promise<void> {
     account.value = await gameRepository.importAccountBackup(serialized, name);
+    settings.value = await gameRepository.loadSettings(account.value.id);
+    configureAudio(settings.value);
     session.value = await gameRepository.loadActiveSession(account.value.id);
     await refreshAccounts();
     if (session.value) queueTask(continueAiTurns);
@@ -160,6 +180,7 @@ export const useAppStore = defineStore("app", () => {
       if (!player) return;
       const next = applyPlayerAction(session.value, player.id, action);
       session.value = await gameRepository.commitSession(next);
+      playDecisionSound(true);
       saveState.value = "saved";
     } catch (error) {
       saveState.value = "error";
@@ -182,12 +203,13 @@ export const useAppStore = defineStore("app", () => {
       const player = getCurrentPlayer(session.value);
       if (!player || player.isHuman) return;
       busy.value = true;
-      await wait(360);
+      await wait(settings.value.aiThinkingTime);
       saveState.value = "saving";
       try {
         const action = decideAiAction(session.value, player);
         const next = applyPlayerAction(session.value, player.id, action);
         session.value = await gameRepository.commitSession(next);
+        playDecisionSound(false);
         saveState.value = "saved";
       } catch (error) {
         saveState.value = "error";
@@ -206,7 +228,10 @@ export const useAppStore = defineStore("app", () => {
     busy.value = true;
     try {
       const previous = session.value;
-      const next = startNextHand(previous);
+      const next = startNextHand(
+        previous,
+        account.value?.level ?? previous.playerLevel,
+      );
       if (next.status === "complete") {
         account.value = await gameRepository.finishSession(next);
         session.value = null;
@@ -300,6 +325,7 @@ export const useAppStore = defineStore("app", () => {
     accounts,
     session,
     saveState,
+    settings,
     currentPlayer,
     humanPlayer,
     isHumanTurn,
@@ -311,6 +337,7 @@ export const useAppStore = defineStore("app", () => {
     renameAccount,
     deleteAccount,
     downgrade,
+    updateSettings,
     exportCurrentAccount,
     importAccountBackup,
     startGame,

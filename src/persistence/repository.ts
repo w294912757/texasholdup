@@ -7,6 +7,11 @@ import {
   MINIMUM_BUY_IN,
 } from "@/domain/progression";
 import { getHumanPlayer } from "@/domain/engine";
+import {
+  DEFAULT_GAME_SETTINGS,
+  normalizeGameSettings,
+  type GameSettings,
+} from "@/domain/settings";
 import type { AccountProfile, GameSession } from "@/domain/types";
 import {
   PokerDatabase,
@@ -31,6 +36,7 @@ export interface AccountBackup {
   handRecords: HandHistoryRecord[];
   ledger: import("./database").LedgerRecord[];
   progression: ProgressionRecord[];
+  settings?: GameSettings;
 }
 
 function timestamp(): string {
@@ -144,7 +150,19 @@ function handRecord(
     handNumber: session.currentHand.number,
     createdAt: session.currentHand.completedAt ?? timestamp(),
     leftTable,
+    playerLevel: session.playerLevel,
+    favorite: false,
+    note: "",
     hand: cloneSerializable(session.currentHand),
+  };
+}
+
+function normalizeHandRecord(record: HandHistoryRecord): HandHistoryRecord {
+  return {
+    ...record,
+    playerLevel: record.playerLevel ?? null,
+    favorite: record.favorite ?? false,
+    note: record.note ?? "",
   };
 }
 
@@ -308,6 +326,7 @@ export class GameRepository {
         await this.db.handRecords.where("accountId").equals(accountId).delete();
         await this.db.ledger.where("accountId").equals(accountId).delete();
         await this.db.progression.where("accountId").equals(accountId).delete();
+        await this.db.meta.delete(`settings:${accountId}`);
         await this.db.accounts.delete(accountId);
 
         const remaining = await this.db.accounts.toArray();
@@ -492,6 +511,10 @@ export class GameRepository {
           replacement.id,
         );
 
+        await this.db.handRecords
+          .where("sessionId")
+          .equals(abandoned.id)
+          .modify({ leftTable: true });
         await this.db.handRecords.put(handRecord(abandoned, true));
         const record = activeRecord(replacement, 1);
         await this.db.activeGames.put(record);
@@ -521,6 +544,10 @@ export class GameRepository {
           "table-refund",
           abandoned.id,
         );
+        await this.db.handRecords
+          .where("sessionId")
+          .equals(abandoned.id)
+          .modify({ leftTable: true });
         await this.db.handRecords.put(handRecord(abandoned, true));
         await this.db.activeGames.delete(abandoned.accountId);
         return publicAccount(account);
@@ -529,23 +556,75 @@ export class GameRepository {
   }
 
   async listHandRecords(accountId: string): Promise<HandHistoryRecord[]> {
-    return this.db.handRecords
+    const records = await this.db.handRecords
       .where("accountId")
       .equals(accountId)
       .reverse()
       .sortBy("createdAt");
+    return records.map(normalizeHandRecord);
+  }
+
+  async loadSettings(accountId: string): Promise<GameSettings> {
+    const saved = await this.db.meta.get(`settings:${accountId}`);
+    if (!saved) return { ...DEFAULT_GAME_SETTINGS };
+    try {
+      return normalizeGameSettings(
+        JSON.parse(saved.value) as Partial<GameSettings>,
+      );
+    } catch {
+      return { ...DEFAULT_GAME_SETTINGS };
+    }
+  }
+
+  async saveSettings(
+    accountId: string,
+    settings: Partial<GameSettings>,
+  ): Promise<GameSettings> {
+    const account = await this.db.accounts.get(accountId);
+    if (!account) throw new Error("账号不存在");
+    const updated = normalizeGameSettings({
+      ...(await this.loadSettings(accountId)),
+      ...settings,
+    });
+    await this.db.meta.put({
+      key: `settings:${accountId}`,
+      value: JSON.stringify(updated),
+    });
+    return updated;
+  }
+
+  async updateHandAnnotation(
+    accountId: string,
+    recordId: string,
+    annotation: { favorite?: boolean; note?: string },
+  ): Promise<HandHistoryRecord> {
+    const note = annotation.note?.trim();
+    if (note !== undefined && note.length > 500)
+      throw new Error("备注不能超过 500 个字符");
+    return this.db.transaction("rw", this.db.handRecords, async () => {
+      const record = await this.db.handRecords.get(recordId);
+      if (!record || record.accountId !== accountId)
+        throw new Error("对局记录不存在或不属于当前账号");
+      const updated = normalizeHandRecord({
+        ...record,
+        favorite: annotation.favorite ?? record.favorite,
+        note: note ?? record.note,
+      });
+      await this.db.handRecords.put(updated);
+      return cloneSerializable(updated);
+    });
   }
 
   async exportAccount(accountId: string): Promise<string> {
     const account = await this.getAccount(accountId);
-    const [activeSession, handRecords, ledger, progression] = await Promise.all(
-      [
+    const [activeSession, handRecords, ledger, progression, settings] =
+      await Promise.all([
         this.loadActiveSession(accountId),
-        this.db.handRecords.where("accountId").equals(accountId).toArray(),
+        this.listHandRecords(accountId),
         this.db.ledger.where("accountId").equals(accountId).toArray(),
         this.db.progression.where("accountId").equals(accountId).toArray(),
-      ],
-    );
+        this.loadSettings(accountId),
+      ]);
     const backup: AccountBackup = {
       kind: "holdup-account-backup",
       schemaVersion: ACCOUNT_BACKUP_SCHEMA_VERSION,
@@ -555,6 +634,7 @@ export class GameRepository {
       handRecords: cloneSerializable(handRecords),
       ledger: cloneSerializable(ledger),
       progression: cloneSerializable(progression),
+      settings,
     };
     return JSON.stringify(backup, null, 2);
   }
@@ -610,7 +690,7 @@ export class GameRepository {
           await this.db.activeGames.add(activeRecord(importedSession, 1));
 
         for (const sourceRecord of parsed.handRecords) {
-          const copied = cloneSerializable(sourceRecord);
+          const copied = normalizeHandRecord(cloneSerializable(sourceRecord));
           copied.id = `${importedAccount.id}:${crypto.randomUUID()}`;
           copied.accountId = importedAccount.id;
           copied.hand = remapHand(copied.hand, importedAccount.name);
@@ -630,6 +710,10 @@ export class GameRepository {
             accountId: importedAccount.id,
           });
         }
+        await this.db.meta.put({
+          key: `settings:${importedAccount.id}`,
+          value: JSON.stringify(normalizeGameSettings(parsed.settings)),
+        });
         await this.db.meta.put({
           key: CURRENT_ACCOUNT_KEY,
           value: importedAccount.id,

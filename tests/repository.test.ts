@@ -5,6 +5,7 @@ import {
   getCurrentPlayer,
   getLegalActions,
   applyPlayerAction,
+  startNextHand,
 } from "@/domain/engine";
 import { PokerDatabase } from "@/persistence/database";
 import { GameRepository, StaleGameError } from "@/persistence/repository";
@@ -101,6 +102,32 @@ describe("transactional game repository", () => {
     );
   });
 
+  it("archives a hand and saves its replacement roster atomically", async () => {
+    const store = repository();
+    const account = await store.initialize();
+    const started = await store.beginSession(
+      createGameSession(account.id, account.name, account.level, config, 79),
+    );
+    let completed = started.session;
+    while (completed.currentHand.phase !== "complete") {
+      const current = getCurrentPlayer(completed)!;
+      completed = applyPlayerAction(
+        completed,
+        current.id,
+        safeAction(completed),
+      );
+    }
+    completed.currentHand.players.find((player) => !player.isHuman)!.stack = 0;
+    const next = startNextHand(completed);
+    const saved = await store.commitNextHand(completed, next);
+
+    expect(await store.loadActiveSession(account.id)).toEqual(saved);
+    expect(await store.listHandRecords(account.id)).toHaveLength(1);
+    expect(saved.currentHand.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(["ai-left", "ai-joined"]),
+    );
+  });
+
   it("keeps committed chips when leaving and starts a fresh match", async () => {
     const store = repository();
     const account = await store.initialize();
@@ -148,6 +175,80 @@ describe("transactional game repository", () => {
     const second = await store.createAccount("second");
     expect((await store.listHandRecords(admin.id)).length).toBe(1);
     expect(await store.listHandRecords(second.id)).toEqual([]);
+  });
+
+  it("keeps favorites and notes account-scoped and includes them in backups", async () => {
+    const store = repository();
+    const admin = await store.initialize();
+    const started = await store.beginSession(
+      createGameSession(admin.id, admin.name, admin.level, config, 146),
+    );
+    let abandoned = forceHumanLeave(started.session);
+    while (abandoned.currentHand.phase !== "complete") {
+      const current = getCurrentPlayer(abandoned)!;
+      abandoned = applyPlayerAction(
+        abandoned,
+        current.id,
+        safeAction(abandoned),
+      );
+    }
+    abandoned = await store.commitSession(abandoned);
+    await store.closeAfterLeave(abandoned);
+    const history = await store.listHandRecords(admin.id);
+    const updated = await store.updateHandAnnotation(admin.id, history[0]!.id, {
+      favorite: true,
+      note: "复盘这手翻牌前加注",
+    });
+    const second = await store.createAccount("annotation-second");
+
+    expect(updated).toMatchObject({
+      favorite: true,
+      note: "复盘这手翻牌前加注",
+      playerLevel: 1,
+    });
+    await expect(
+      store.updateHandAnnotation(second.id, updated.id, { favorite: false }),
+    ).rejects.toThrow("不属于当前账号");
+
+    const imported = await store.importAccountBackup(
+      await store.exportAccount(admin.id),
+      "annotation-backup",
+    );
+    expect(await store.listHandRecords(imported.id)).toMatchObject([
+      { favorite: true, note: "复盘这手翻牌前加注", playerLevel: 1 },
+    ]);
+  });
+
+  it("keeps game settings account-scoped and includes them in backups", async () => {
+    const store = repository();
+    const admin = await store.initialize();
+    await store.saveSettings(admin.id, {
+      aiThinkingTime: 0,
+      cardStyle: "high-contrast",
+      volume: 72,
+    });
+    const second = await store.createAccount("settings-second");
+
+    expect(await store.loadSettings(admin.id)).toMatchObject({
+      aiThinkingTime: 0,
+      cardStyle: "high-contrast",
+      volume: 72,
+    });
+    expect(await store.loadSettings(second.id)).toMatchObject({
+      aiThinkingTime: 360,
+      cardStyle: "classic",
+      volume: 35,
+    });
+
+    const imported = await store.importAccountBackup(
+      await store.exportAccount(admin.id),
+      "settings-backup",
+    );
+    expect(await store.loadSettings(imported.id)).toMatchObject({
+      aiThinkingTime: 0,
+      cardStyle: "high-contrast",
+      volume: 72,
+    });
   });
 
   it("keeps the selected account when deleting another account", async () => {

@@ -5,6 +5,7 @@ import {
   createGameSession,
   getCurrentPlayer,
   getLegalActions,
+  getPlayerHandType,
 } from "@/domain/engine";
 import type { GameSession, PlayerAction } from "@/domain/types";
 
@@ -120,5 +121,74 @@ describe("holdem engine", () => {
         0,
       ),
     ).toBe(totalBefore);
+  });
+
+  it("splits a tied pot evenly and credits every tied player", () => {
+    let session = createGameSession(
+      "account",
+      "admin",
+      1,
+      { ...config, aiCount: 2 },
+      321,
+    );
+    const hand = session.currentHand;
+    const players = hand.players;
+    players.forEach((player) => {
+      player.stack = 100;
+      player.committedHand = 0;
+      player.committedRound = 0;
+      player.folded = false;
+      player.allIn = false;
+      player.holeCards = ["As", "Kd"];
+    });
+    hand.phase = "river";
+    hand.board = ["2c", "3d", "4h", "8s"];
+    hand.deck = ["Ah", "6c"];
+    hand.currentBet = 0;
+    hand.pendingPlayerIds = players.map((player) => player.id);
+    hand.currentSeat = players[0]?.seat ?? null;
+
+    let guard = 0;
+    while (
+      session.currentHand.phase !== "complete" &&
+      guard < players.length + 1
+    ) {
+      const current = getCurrentPlayer(session);
+      expect(current).not.toBeNull();
+      const legal = getLegalActions(session, current!.id);
+      session = applyPlayerAction(
+        session,
+        current!.id,
+        legal.some((action) => action.type === "all-in")
+          ? { type: "all-in" }
+          : { type: "call" },
+      );
+      guard += 1;
+    }
+
+    expect(session.currentHand.phase).toBe("complete");
+    expect(session.currentHand.pots).toHaveLength(1);
+    expect(session.currentHand.pots[0]).toEqual(
+      expect.objectContaining({
+        amount: 300,
+        winnerIds: expect.arrayContaining(players.map((player) => player.id)),
+      }),
+    );
+    expect(session.currentHand.pots[0]?.winnerIds).toHaveLength(players.length);
+    expect(session.currentHand.players.map((player) => player.stack)).toEqual([
+      100, 100, 100,
+    ]);
+  });
+
+  it("recomputes the player's hand type as community cards arrive", () => {
+    const session = createGameSession("account", "admin", 1, config, 654);
+    const player = session.currentHand.players[0]!;
+    player.holeCards = ["As", "Ad"];
+
+    expect(getPlayerHandType(player, [])).toBe("一对");
+    expect(getPlayerHandType(player, ["Ac", "2h", "7s"])).toBe("三条");
+    expect(getPlayerHandType(player, ["Ac", "2h", "7s", "7c", "9d"])).toBe(
+      "葫芦",
+    );
   });
 });

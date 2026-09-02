@@ -13,6 +13,7 @@ export interface ReplayPlayer {
   stack: number;
   committed: number;
   folded: boolean;
+  winner: boolean;
   holeCards: Card[];
 }
 
@@ -55,6 +56,7 @@ export function createReplayFrames(hand: HandState): ReplayFrame[] {
     stack: player.stack + player.committedHand - (awards.get(player.id) ?? 0),
     committed: 0,
     folded: false,
+    winner: false,
     holeCards: [...player.holeCards],
   }));
 
@@ -83,6 +85,7 @@ export function createReplayFrames(hand: HandState): ReplayFrame[] {
       pot: event.pot,
       players: players.map((item) => ({
         ...item,
+        winner: event.phase === "complete" && hand.winnerIds.includes(item.id),
         holeCards:
           item.isHuman || (event.phase === "complete" && !item.folded)
             ? [...item.holeCards]

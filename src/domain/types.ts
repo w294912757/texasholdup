@@ -32,6 +32,28 @@ export interface SeatProfile {
   isHuman: boolean;
   avatarKey: string;
   aiTier?: number;
+  aiBand?: AiProfile["band"];
+}
+
+export interface AiTableState {
+  playerId: string;
+  joinedHand: number;
+  handsPlayed: number;
+  entryStack: number;
+  lastStack: number;
+  recentNetResults: number[];
+}
+
+export interface AiRotationDetails {
+  seat: number;
+  reason: "busted" | "voluntary" | "replacement";
+  remainingStack: number;
+  handsPlayed: number;
+  recentNet: number;
+  probability?: number;
+  roll?: number;
+  aiTier?: number;
+  aiBand?: AiProfile["band"];
 }
 
 export interface PlayerState extends SeatProfile {
@@ -59,6 +81,8 @@ export interface GameEvent {
     | "street-started"
     | "player-acted"
     | "player-left"
+    | "ai-left"
+    | "ai-joined"
     | "pot-awarded"
     | "hand-complete";
   phase: HandPhase;
@@ -69,6 +93,7 @@ export interface GameEvent {
   pot: number;
   message: string;
   createdAt: string;
+  rotation?: AiRotationDetails;
 }
 
 export interface HandState {
@@ -104,6 +129,7 @@ export interface GameSession {
   seed: number;
   roster: SeatProfile[];
   stacks: Record<string, number>;
+  aiStates: Record<string, AiTableState>;
   currentHand: HandState;
   completedHands: number;
   status: SessionStatus;

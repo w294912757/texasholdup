@@ -20,6 +20,9 @@ export interface HandHistoryRecord {
   handNumber: number;
   createdAt: string;
   leftTable: boolean;
+  playerLevel: number | null;
+  favorite: boolean;
+  note: string;
   hand: HandState;
 }
 
@@ -79,6 +82,38 @@ export class PokerDatabase extends Dexie {
       progression: "id,[accountId+createdAt],accountId,sessionId,type",
       meta: "key",
     });
+    this.version(3)
+      .stores({
+        accounts: "id,&nameKey,updatedAt",
+        activeGames: "accountId,sessionId,updatedAt",
+        handRecords: "id,[accountId+createdAt],accountId,sessionId,handNumber",
+        ledger: "id,[accountId+createdAt],accountId,sessionId,type",
+        progression: "id,[accountId+createdAt],accountId,sessionId,type",
+        meta: "key",
+      })
+      .upgrade(async (transaction) => {
+        const records = transaction.table<HandHistoryRecord>("handRecords");
+        const progression = await transaction
+          .table<ProgressionRecord>("progression")
+          .toArray();
+        const levelsBySession = new Map(
+          progression
+            .filter((entry) => entry.type === "experience" && entry.sessionId)
+            .map((entry) => [entry.sessionId!, entry.levelBefore]),
+        );
+        const leftSessionIds = new Set(
+          (await records.toArray())
+            .filter((record) => record.leftTable)
+            .map((record) => record.sessionId),
+        );
+        await records.toCollection().modify((record) => {
+          record.leftTable = leftSessionIds.has(record.sessionId);
+          record.playerLevel =
+            record.playerLevel ?? levelsBySession.get(record.sessionId) ?? null;
+          record.favorite = record.favorite ?? false;
+          record.note = record.note ?? "";
+        });
+      });
   }
 }
 

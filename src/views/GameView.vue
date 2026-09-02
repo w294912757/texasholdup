@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ArrowRight, DoorOpen, Save, Volume2 } from "@lucide/vue";
 import PlayingCard from "@/components/PlayingCard.vue";
-import { getLegalActions, handPot } from "@/domain/engine";
+import { getLegalActions, getPlayerHandType, handPot } from "@/domain/engine";
 import type { LegalAction, PlayerAction, PlayerState } from "@/domain/types";
 import { useAppStore } from "@/stores/app";
 
@@ -90,6 +90,16 @@ function playerCardsVisible(player: PlayerState): boolean {
   return hand.value?.phase === "complete" && !player.folded;
 }
 
+function playerHandType(player: PlayerState): string | null {
+  if (!hand.value || player.holeCards.length === 0) return null;
+  return getPlayerHandType(player, hand.value.board);
+}
+
+function playerHandTypeVisible(player: PlayerState): boolean {
+  if (player.isHuman) return true;
+  return Boolean(hand.value && hand.value.board.length >= 3 && !player.folded);
+}
+
 function actionLabel(action: LegalAction): string {
   return action.label;
 }
@@ -133,6 +143,23 @@ async function proceed(): Promise<void> {
     if (result === "finished") {
       ElMessage.success("本场牌局已完成并结算");
       await router.push("/");
+      return;
+    }
+
+    const rosterEvents =
+      store.session?.currentHand.events.filter(
+        (event) => event.type === "ai-left" || event.type === "ai-joined",
+      ) ?? [];
+    const departed = rosterEvents.filter((event) => event.type === "ai-left");
+    const joined = rosterEvents.filter((event) => event.type === "ai-joined");
+    if (departed.length) {
+      ElMessage.info({
+        message:
+          departed.length === 1 && joined.length === 1
+            ? `${departed[0]?.message.replace("离开牌桌", "离桌")}，${joined[0]?.message}`
+            : `${departed.length} 名对手离桌，${joined.length} 名新对手入座`,
+        duration: 1_600,
+      });
     }
   } catch (error) {
     ElMessage.error(
@@ -191,6 +218,9 @@ async function proceed(): Promise<void> {
                 {
                   'poker-seat--acting': player.seat === hand.currentSeat,
                   'poker-seat--folded': player.folded,
+                  'poker-seat--winner':
+                    hand.phase === 'complete' &&
+                    hand.winnerIds.includes(player.id),
                 },
               ]"
             >
@@ -215,6 +245,12 @@ async function proceed(): Promise<void> {
                   compact
                 />
               </div>
+              <span
+                v-if="playerHandTypeVisible(player) && playerHandType(player)"
+                class="poker-seat__hand-type"
+              >
+                {{ playerHandType(player) }}
+              </span>
               <span v-if="player.committedRound > 0" class="poker-seat__bet"
                 >下注 {{ player.committedRound }}</span
               >
@@ -303,6 +339,10 @@ async function proceed(): Promise<void> {
             :step="store.session.config.bigBlind"
             controls-position="right"
           />
+          <span v-if="store.settings.beginnerHints" class="bet-control__hint">
+            输入总下注额，范围 {{ aggressiveAction.minTarget }} 至
+            {{ aggressiveAction.maxTarget }}
+          </span>
         </div>
         <div class="decision-panel__buttons">
           <el-button

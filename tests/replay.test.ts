@@ -52,5 +52,15 @@ describe("hand replay", () => {
         ?.players.filter((player) => !player.isHuman)
         .every((player) => player.holeCards.length === 0),
     ).toBe(true);
+    expect(
+      frames
+        .filter((frame) => frame.phase !== "complete")
+        .every((frame) => frame.players.every((player) => !player.winner)),
+    ).toBe(true);
+    expect(
+      finalFrame.players
+        .filter((player) => player.winner)
+        .map((player) => player.id),
+    ).toEqual(session.currentHand.winnerIds);
   });
 });

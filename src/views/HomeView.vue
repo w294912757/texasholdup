@@ -3,11 +3,14 @@ import { computed, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
+  ChartColumnIncreasing,
+  CircleHelp,
   CircleDollarSign,
   List,
   Play,
   RotateCcw,
   ShieldCheck,
+  Settings,
   Trophy,
   Users,
 } from "@lucide/vue";
@@ -20,6 +23,7 @@ const store = useAppStore();
 const router = useRouter();
 const downgradeDialogVisible = ref(false);
 const progressionDialogVisible = ref(false);
+const progressionHelpVisible = ref(false);
 const progressionRecords = ref<ProgressionRecord[]>([]);
 const downgradeTarget = ref(1);
 const form = reactive({
@@ -120,7 +124,22 @@ async function openProgression(): Promise<void> {
             :size="19"
             aria-hidden="true"
           />
-          <span class="profile-metric__label">升级进度</span>
+          <span class="profile-metric__label-row">
+            <span class="profile-metric__label">升级进度</span>
+            <button
+              class="profile-metric__help"
+              type="button"
+              title="经验与升级规则"
+              aria-label="查看经验与升级规则"
+              @click="progressionHelpVisible = true"
+            >
+              <CircleHelp
+                class="profile-metric__help-icon"
+                :size="15"
+                aria-hidden="true"
+              />
+            </button>
+          </span>
           <el-progress
             class="profile-metric__progress"
             :percentage="store.levelProgress"
@@ -132,6 +151,20 @@ async function openProgression(): Promise<void> {
         </div>
       </div>
       <div class="profile-overview__commands">
+        <el-button
+          class="profile-overview__command"
+          :icon="Settings"
+          @click="router.push('/settings')"
+        >
+          游戏设置
+        </el-button>
+        <el-button
+          class="profile-overview__command"
+          :icon="ChartColumnIncreasing"
+          @click="router.push('/statistics')"
+        >
+          牌局统计
+        </el-button>
         <el-button
           class="profile-overview__command"
           :icon="List"
@@ -321,6 +354,50 @@ async function openProgression(): Promise<void> {
         </el-table-column>
         <el-table-column prop="createdAt" label="时间" min-width="180" />
       </el-table>
+    </el-dialog>
+
+    <el-dialog
+      v-model="progressionHelpVisible"
+      class="progression-help-dialog"
+      title="经验与升级规则"
+      width="min(520px, 92vw)"
+    >
+      <dl class="progression-help-dialog__rules">
+        <div class="progression-help-dialog__rule">
+          <dt class="progression-help-dialog__term">结算条件</dt>
+          <dd class="progression-help-dialog__description">
+            正常完成 20 手牌且本场净盈利大于 0
+            时结算经验。中途离桌、零盈利或亏损均不获得经验。
+          </dd>
+        </div>
+        <div class="progression-help-dialog__rule">
+          <dt class="progression-help-dialog__term">经验公式</dt>
+          <dd class="progression-help-dialog__description">
+            经验 = 向下取整（净盈利 ÷ 10）+ 完成手数 × 2。满足结算条件时每场最低
+            25 XP，最高 500 XP。
+          </dd>
+        </div>
+        <div class="progression-help-dialog__rule">
+          <dt class="progression-help-dialog__term">升级阈值</dt>
+          <dd class="progression-help-dialog__description">
+            当前等级所需经验为“当前等级 × 100
+            XP”。达到阈值后自动升级，多余经验会继续用于后续等级。
+          </dd>
+        </div>
+        <div class="progression-help-dialog__rule">
+          <dt class="progression-help-dialog__term">等级影响</dt>
+          <dd class="progression-help-dialog__description">
+            等级只调整匹配到不同水平 AI
+            的概率，不会直接指定整桌对手强度，界面也不会公开 AI 难度。
+          </dd>
+        </div>
+        <div class="progression-help-dialog__rule">
+          <dt class="progression-help-dialog__term">手动降级</dt>
+          <dd class="progression-help-dialog__description">
+            只能选择低于当前等级的级别。降级会清空当前等级经验，之后只能通过获得经验再次自动升级。
+          </dd>
+        </div>
+      </dl>
     </el-dialog>
   </div>
 </template>

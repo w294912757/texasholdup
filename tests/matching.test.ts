@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { matchAiProfiles, publicAiProfile } from "@/domain/matching";
+import {
+  difficultyBandForTier,
+  matchAiProfiles,
+  matchReplacementAiProfile,
+  publicAiProfile,
+} from "@/domain/matching";
 
 describe("probability-based matching", () => {
   it("keeps a full table internally diverse", () => {
@@ -8,6 +13,7 @@ describe("probability-based matching", () => {
       expect(
         new Set(profiles.map((profile) => profile.band)).size,
       ).toBeGreaterThanOrEqual(2);
+      expect(new Set(profiles.map((profile) => profile.name)).size).toBe(5);
     }
   });
 
@@ -39,5 +45,26 @@ describe("probability-based matching", () => {
 
     expect(visibleProfile).not.toHaveProperty("tier");
     expect(visibleProfile).not.toHaveProperty("band");
+  });
+
+  it("matches a replacement inside the current level bands", () => {
+    const profile = matchReplacementAiProfile(8, "replacement", "ai-2-h4", [
+      "林默",
+      "周澈",
+      "陈乔",
+    ]);
+
+    expect(profile.id).toBe("ai-2-h4");
+    expect(["林默", "周澈", "陈乔"]).not.toContain(profile.name);
+    expect(profile.band).toBe(difficultyBandForTier(8, profile.tier));
+  });
+
+  it("can force a different available band to keep the table diverse", () => {
+    for (let seed = 0; seed < 40; seed += 1) {
+      expect(
+        matchReplacementAiProfile(6, seed, `replacement-${seed}`, [], "peer")
+          .band,
+      ).not.toBe("peer");
+    }
   });
 });

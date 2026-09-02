@@ -1,7 +1,7 @@
 import { createRandom } from "./cards";
 import type { AiProfile } from "./types";
 
-type DifficultyBand = AiProfile["band"];
+export type DifficultyBand = AiProfile["band"];
 
 const names = [
   "林默",
@@ -83,6 +83,53 @@ function pickDifferentBand(
   );
 }
 
+export function difficultyBandForTier(
+  playerLevel: number,
+  tier: number,
+): DifficultyBand {
+  const normalizedLevel = Math.max(1, Math.min(MAX_AI_TIER, playerLevel));
+  if (tier < normalizedLevel - 1) return "lower";
+  if (tier > normalizedLevel + 1) return "higher";
+  return "peer";
+}
+
+export function matchReplacementAiProfile(
+  playerLevel: number,
+  seed: string | number,
+  id: string,
+  excludedNames: Iterable<string> = [],
+  excludedBand?: DifficultyBand,
+): AiProfile {
+  const random = createRandom(seed);
+  const candidates = candidateTiers(playerLevel);
+  if (excludedBand) {
+    const availableBandCount = (
+      Object.keys(candidates) as DifficultyBand[]
+    ).filter((band) => candidates[band].length > 0).length;
+    if (availableBandCount > 1) candidates[excludedBand] = [];
+  }
+  const weights = normalizedWeights(playerLevel, candidates);
+  const band = pickBand(random(), weights);
+  const tiers = candidates[band];
+  const tier =
+    tiers[Math.floor(random() * tiers.length)] ??
+    Math.max(1, Math.min(MAX_AI_TIER, playerLevel));
+  const excluded = new Set(excludedNames);
+  const availableNames = names.filter((name) => !excluded.has(name));
+  const namePool = availableNames.length ? availableNames : names;
+  const nameIndex = Math.floor(random() * namePool.length);
+  const name = namePool[nameIndex] ?? `对手 ${id}`;
+  const avatarIndex = Math.max(0, names.indexOf(name));
+
+  return {
+    id,
+    name,
+    avatarKey: `avatar-${(avatarIndex % 6) + 1}`,
+    tier,
+    band,
+  };
+}
+
 export function matchAiProfiles(
   playerLevel: number,
   count: number,
@@ -93,18 +140,23 @@ export function matchAiProfiles(
   const random = createRandom(seed);
   const candidates = candidateTiers(playerLevel);
   const weights = normalizedWeights(playerLevel, candidates);
+  const usedNames = new Set<string>();
   const profiles = Array.from({ length: count }, (_, index) => {
     const band = pickBand(random(), weights);
     const tiers = candidates[band];
     const tier =
       tiers[Math.floor(random() * tiers.length)] ??
       Math.max(1, Math.min(MAX_AI_TIER, playerLevel));
-    const nameIndex =
-      (Math.floor(random() * names.length) + index) % names.length;
+    const availableNames = names.filter((name) => !usedNames.has(name));
+    const name =
+      availableNames[Math.floor(random() * availableNames.length)] ??
+      `对手 ${index + 1}`;
+    usedNames.add(name);
+    const nameIndex = Math.max(0, names.indexOf(name));
 
     return {
       id: `ai-${index + 1}`,
-      name: names[nameIndex] ?? `对手 ${index + 1}`,
+      name,
       avatarKey: `avatar-${(nameIndex % 6) + 1}`,
       tier,
       band,

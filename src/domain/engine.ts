@@ -1,6 +1,7 @@
 import { Hand } from "pokersolver";
 import { createShuffledDeck } from "./cards";
 import { matchAiProfiles } from "./matching";
+import { rotateAiRoster, type AiRosterChange } from "./roster";
 import type {
   Card,
   GameConfig,
@@ -173,6 +174,29 @@ function bestHands(players: PlayerState[], board: Card[]): Map<string, Hand> {
       Hand.solve([...player.holeCards, ...board]),
     ]),
   );
+}
+
+const handTypeLabels: Record<string, string> = {
+  "Royal Flush": "皇家同花顺",
+  "Straight Flush": "同花顺",
+  "Four of a Kind": "四条",
+  "Full House": "葫芦",
+  Flush: "同花",
+  Straight: "顺子",
+  "Three of a Kind": "三条",
+  "Two Pair": "两对",
+  Pair: "一对",
+  "High Card": "高牌",
+};
+
+/** Return the best currently available hand category for a player's visible state. */
+export function getPlayerHandType(
+  player: PlayerState,
+  board: Card[],
+): string | null {
+  if (player.holeCards.length === 0) return null;
+  const solved = Hand.solve([...player.holeCards, ...board]);
+  return handTypeLabels[solved.name] ?? solved.name;
 }
 
 function buildPots(
@@ -355,6 +379,7 @@ function createPlayers(
 function createHand(
   session: GameSession,
   previousDealerSeat: number | null,
+  rosterChanges: AiRosterChange[] = [],
 ): HandState {
   const players = createPlayers(session.roster, session.stacks);
   if (players.length < 2) throw new Error("至少需要两名有筹码的玩家");
@@ -394,6 +419,18 @@ function createHand(
     completedAt: null,
   };
 
+  for (const change of rosterChanges) {
+    pushEvent(hand, {
+      type: change.type === "left" ? "ai-left" : "ai-joined",
+      phase: "preflop",
+      playerId: change.playerId,
+      message:
+        change.type === "left"
+          ? `${change.name} 离开牌桌`
+          : `${change.name} 加入牌桌`,
+      rotation: change.details,
+    });
+  }
   pushEvent(hand, {
     type: "hand-started",
     phase: "preflop",
@@ -459,6 +496,7 @@ export function createGameSession(
       isHuman: false,
       avatarKey: profile.avatarKey,
       aiTier: profile.tier,
+      aiBand: profile.band,
     })),
   ];
   const timestamp = now();
@@ -472,6 +510,19 @@ export function createGameSession(
     roster,
     stacks: Object.fromEntries(
       roster.map((profile) => [profile.id, config.buyIn]),
+    ),
+    aiStates: Object.fromEntries(
+      aiProfiles.map((profile) => [
+        profile.id,
+        {
+          playerId: profile.id,
+          joinedHand: 1,
+          handsPlayed: 0,
+          entryStack: config.buyIn,
+          lastStack: config.buyIn,
+          recentNetResults: [],
+        },
+      ]),
     ),
     currentHand: {} as HandState,
     completedHands: 0,
@@ -698,7 +749,10 @@ export function forceHumanLeave(session: GameSession): GameSession {
   return next;
 }
 
-export function startNextHand(session: GameSession): GameSession {
+export function startNextHand(
+  session: GameSession,
+  playerLevel = session.playerLevel,
+): GameSession {
   if (session.currentHand.phase !== "complete")
     throw new Error("当前手牌尚未结束");
 
@@ -708,21 +762,23 @@ export function startNextHand(session: GameSession): GameSession {
     next.currentHand.players.map((player) => [player.id, player.stack]),
   );
   const humanStack = next.stacks[HUMAN_ID] ?? 0;
-  const fundedPlayers = Object.values(next.stacks).filter(
-    (stack) => stack > 0,
-  ).length;
 
-  if (
-    next.completedHands >= next.config.maxHands ||
-    humanStack <= 0 ||
-    fundedPlayers < 2
-  ) {
+  if (next.completedHands >= next.config.maxHands || humanStack <= 0) {
     next.status = "complete";
     next.updatedAt = now();
     return next;
   }
 
-  next.currentHand = createHand(next, session.currentHand.dealerSeat);
+  next.playerLevel = playerLevel;
+  const rotation = rotateAiRoster(next, playerLevel);
+  next.roster = rotation.roster;
+  next.stacks = rotation.stacks;
+  next.aiStates = rotation.aiStates;
+  next.currentHand = createHand(
+    next,
+    session.currentHand.dealerSeat,
+    rotation.changes,
+  );
   next.updatedAt = now();
   return next;
 }

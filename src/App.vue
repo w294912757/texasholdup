@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   CircleUserRound,
+  ChartColumnIncreasing,
   Download,
   History,
   House,
@@ -12,6 +13,7 @@ import {
   Spade,
   Trash2,
   Upload,
+  Settings,
 } from "@lucide/vue";
 import { useAppStore } from "@/stores/app";
 
@@ -161,7 +163,13 @@ async function importAccount(event: unknown): Promise<void> {
 
 <template>
   <el-config-provider :message="{ duration: 1600 }">
-    <div class="application-shell">
+    <div
+      class="application-shell"
+      :class="[
+        `application-shell--motion-${store.settings.animationSpeed}`,
+        `application-shell--cards-${store.settings.cardStyle}`,
+      ]"
+    >
       <header class="application-header">
         <button
           class="application-brand"
@@ -210,6 +218,40 @@ async function importAccount(event: unknown): Promise<void> {
               aria-hidden="true"
             />
             <span class="application-navigation__label">记录</span>
+          </button>
+          <button
+            class="application-navigation__button"
+            :class="{
+              'application-navigation__button--active':
+                route.name === 'statistics',
+            }"
+            type="button"
+            title="牌局统计"
+            @click="router.push('/statistics')"
+          >
+            <ChartColumnIncreasing
+              class="application-navigation__icon"
+              :size="18"
+              aria-hidden="true"
+            />
+            <span class="application-navigation__label">统计</span>
+          </button>
+          <button
+            class="application-navigation__button"
+            :class="{
+              'application-navigation__button--active':
+                route.name === 'settings',
+            }"
+            type="button"
+            title="游戏设置"
+            @click="router.push('/settings')"
+          >
+            <Settings
+              class="application-navigation__icon"
+              :size="18"
+              aria-hidden="true"
+            />
+            <span class="application-navigation__label">设置</span>
           </button>
         </nav>
 
