@@ -97,7 +97,11 @@ function playerHandType(player: PlayerState): string | null {
 
 function playerHandTypeVisible(player: PlayerState): boolean {
   if (player.isHuman) return true;
-  return Boolean(hand.value && hand.value.board.length >= 3 && !player.folded);
+  return Boolean(
+    hand.value &&
+    (hand.value.phase === "showdown" || hand.value.phase === "complete") &&
+    !player.folded,
+  );
 }
 
 function actionLabel(action: LegalAction): string {

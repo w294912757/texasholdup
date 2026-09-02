@@ -111,6 +111,9 @@ async function startGame(page: Page): Promise<void> {
   await expect(page.locator(".decision-panel__actions")).toBeVisible({
     timeout: 15_000,
   });
+  await expect(
+    page.locator(".poker-seat--opponent .poker-seat__hand-type"),
+  ).toHaveCount(0);
 }
 
 async function expectReadableCards(
@@ -237,6 +240,17 @@ test("starts the next hand after a completed hand", async ({ page }) => {
   await expect(winnerSeats.first()).toHaveCSS(
     "border-color",
     "rgb(79, 209, 154)",
+  );
+  expect(
+    await page
+      .locator(
+        ".poker-seat--opponent:not(.poker-seat--folded) .poker-seat__hand-type",
+      )
+      .count(),
+  ).toBe(
+    await page
+      .locator(".poker-seat--opponent:not(.poker-seat--folded)")
+      .count(),
   );
   await page.screenshot({
     path: "test-results/table-winner-highlight.png",
