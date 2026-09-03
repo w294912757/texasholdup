@@ -16,6 +16,12 @@ import {
 } from "@lucide/vue";
 import { useAppStore } from "@/stores/app";
 import type { GameConfig } from "@/domain/types";
+import {
+  AI_DIFFICULTY_GROUPS,
+  getAiMatchingGuide,
+  MAX_AI_TIER,
+  MIN_AI_TIER,
+} from "@/domain/matching";
 import { gameRepository } from "@/persistence/repository";
 import type { ProgressionRecord } from "@/persistence/database";
 
@@ -24,6 +30,7 @@ const router = useRouter();
 const downgradeDialogVisible = ref(false);
 const progressionDialogVisible = ref(false);
 const progressionHelpVisible = ref(false);
+const progressionHelpTab = ref("matching");
 const progressionRecords = ref<ProgressionRecord[]>([]);
 const downgradeTarget = ref(1);
 const form = reactive({
@@ -41,6 +48,24 @@ const levelOptions = computed(() =>
     (_, index) => index + 1,
   ),
 );
+const aiMatchingGuide = computed(() =>
+  getAiMatchingGuide(store.account?.level ?? 1),
+);
+
+function tierRange(tiers: number[]): string {
+  if (!tiers.length) return "当前无可用档位";
+  if (tiers.length === 1) return `${tiers[0]} 档`;
+  return `${tiers[0]}–${tiers.at(-1)} 档`;
+}
+
+function matchingProbability(probability: number): string {
+  return `${Math.round(probability * 100)}%`;
+}
+
+function openProgressionHelp(): void {
+  progressionHelpTab.value = "matching";
+  progressionHelpVisible.value = true;
+}
 
 async function beginMatch(): Promise<void> {
   const [smallBlind, bigBlind] = form.blinds.split("/").map(Number);
@@ -131,7 +156,7 @@ async function openProgression(): Promise<void> {
               type="button"
               title="经验与升级规则"
               aria-label="查看经验与升级规则"
-              @click="progressionHelpVisible = true"
+              @click="openProgressionHelp"
             >
               <CircleHelp
                 class="profile-metric__help-icon"
@@ -359,45 +384,159 @@ async function openProgression(): Promise<void> {
     <el-dialog
       v-model="progressionHelpVisible"
       class="progression-help-dialog"
-      title="经验与升级规则"
-      width="min(520px, 92vw)"
+      title="等级与匹配说明"
+      width="min(660px, 94vw)"
     >
-      <dl class="progression-help-dialog__rules">
-        <div class="progression-help-dialog__rule">
-          <dt class="progression-help-dialog__term">结算条件</dt>
-          <dd class="progression-help-dialog__description">
-            正常完成 20 手牌且本场净盈利大于 0
-            时结算经验。中途离桌、零盈利或亏损均不获得经验。
-          </dd>
-        </div>
-        <div class="progression-help-dialog__rule">
-          <dt class="progression-help-dialog__term">经验公式</dt>
-          <dd class="progression-help-dialog__description">
-            经验 = 向下取整（净盈利 ÷ 10）+ 完成手数 × 2。满足结算条件时每场最低
-            25 XP，最高 500 XP。
-          </dd>
-        </div>
-        <div class="progression-help-dialog__rule">
-          <dt class="progression-help-dialog__term">升级阈值</dt>
-          <dd class="progression-help-dialog__description">
-            当前等级所需经验为“当前等级 × 100
-            XP”。达到阈值后自动升级，多余经验会继续用于后续等级。
-          </dd>
-        </div>
-        <div class="progression-help-dialog__rule">
-          <dt class="progression-help-dialog__term">等级影响</dt>
-          <dd class="progression-help-dialog__description">
-            等级只调整匹配到不同水平 AI
-            的概率，不会直接指定整桌对手强度，界面也不会公开 AI 难度。
-          </dd>
-        </div>
-        <div class="progression-help-dialog__rule">
-          <dt class="progression-help-dialog__term">手动降级</dt>
-          <dd class="progression-help-dialog__description">
-            只能选择低于当前等级的级别。降级会清空当前等级经验，之后只能通过获得经验再次自动升级。
-          </dd>
-        </div>
-      </dl>
+      <el-tabs
+        v-model="progressionHelpTab"
+        class="progression-help-dialog__tabs"
+      >
+        <el-tab-pane label="AI 匹配" name="matching">
+          <div class="ai-matching-guide">
+            <div class="ai-matching-guide__summary">
+              <div class="ai-matching-guide__summary-item">
+                <span class="ai-matching-guide__summary-label">当前等级</span>
+                <strong class="ai-matching-guide__summary-value">
+                  Lv.{{ aiMatchingGuide.playerLevel }}
+                </strong>
+              </div>
+              <div class="ai-matching-guide__summary-item">
+                <span class="ai-matching-guide__summary-label"
+                  >当前可匹配范围</span
+                >
+                <strong class="ai-matching-guide__summary-value">
+                  {{ aiMatchingGuide.minimumTier }}–{{
+                    aiMatchingGuide.maximumTier
+                  }}
+                  档
+                </strong>
+              </div>
+              <div class="ai-matching-guide__summary-item">
+                <span class="ai-matching-guide__summary-label"
+                  >完整难度范围</span
+                >
+                <strong class="ai-matching-guide__summary-value">
+                  {{ MIN_AI_TIER }}–{{ MAX_AI_TIER }} 档
+                </strong>
+              </div>
+            </div>
+
+            <p class="ai-matching-guide__explanation">
+              当前匹配池会随玩家等级逐步上移，并保留偏弱、接近和少量偏强对手；不会在初始等级直接抽取最高难度。
+              多人桌若全部抽中同一相对区间，最后一席会调整到其他可用区间。
+              <span
+                v-if="
+                  aiMatchingGuide.scaleLevel !== aiMatchingGuide.playerLevel
+                "
+                class="ai-matching-guide__scale-note"
+              >
+                当前按最高 Lv.{{ aiMatchingGuide.scaleLevel }} 难度标尺计算。
+              </span>
+            </p>
+
+            <section
+              class="ai-matching-guide__section"
+              aria-labelledby="matching-distribution-title"
+            >
+              <h3
+                id="matching-distribution-title"
+                class="ai-matching-guide__section-title"
+              >
+                本级基础抽取概率
+              </h3>
+              <div class="ai-matching-guide__bands">
+                <div
+                  v-for="band in aiMatchingGuide.bands"
+                  :key="band.band"
+                  class="ai-matching-guide__band"
+                  :class="`ai-matching-guide__band--${band.band}`"
+                >
+                  <span class="ai-matching-guide__band-label">{{
+                    band.label
+                  }}</span>
+                  <strong class="ai-matching-guide__band-probability">{{
+                    matchingProbability(band.probability)
+                  }}</strong>
+                  <span class="ai-matching-guide__band-range">{{
+                    tierRange(band.tiers)
+                  }}</span>
+                </div>
+              </div>
+            </section>
+
+            <section
+              class="ai-matching-guide__section"
+              aria-labelledby="difficulty-scale-title"
+            >
+              <h3
+                id="difficulty-scale-title"
+                class="ai-matching-guide__section-title"
+              >
+                AI 难度说明
+              </h3>
+              <div class="ai-matching-guide__levels">
+                <div
+                  v-for="group in AI_DIFFICULTY_GROUPS"
+                  :key="group.label"
+                  class="ai-matching-guide__level"
+                >
+                  <span class="ai-matching-guide__level-range">
+                    {{ group.minTier }}–{{ group.maxTier }} 档
+                  </span>
+                  <strong class="ai-matching-guide__level-name">{{
+                    group.label
+                  }}</strong>
+                  <p class="ai-matching-guide__level-description">
+                    {{ group.description }}
+                  </p>
+                </div>
+              </div>
+            </section>
+
+            <p class="ai-matching-guide__privacy">
+              为保持信息公平，牌桌和对局记录不会显示任何 AI 的实际档位。
+            </p>
+          </div>
+        </el-tab-pane>
+        <el-tab-pane label="经验规则" name="experience">
+          <dl class="progression-help-dialog__rules">
+            <div class="progression-help-dialog__rule">
+              <dt class="progression-help-dialog__term">结算条件</dt>
+              <dd class="progression-help-dialog__description">
+                正常完成 20 手牌且本场净盈利大于 0
+                时结算经验。中途离桌、零盈利或亏损均不获得经验。
+              </dd>
+            </div>
+            <div class="progression-help-dialog__rule">
+              <dt class="progression-help-dialog__term">经验公式</dt>
+              <dd class="progression-help-dialog__description">
+                经验 = 向下取整（净盈利 ÷ 10）+ 完成手数 ×
+                2。满足结算条件时每场最低 25 XP，最高 500 XP。
+              </dd>
+            </div>
+            <div class="progression-help-dialog__rule">
+              <dt class="progression-help-dialog__term">升级阈值</dt>
+              <dd class="progression-help-dialog__description">
+                当前等级所需经验为“当前等级 × 100
+                XP”。达到阈值后自动升级，多余经验会继续用于后续等级。
+              </dd>
+            </div>
+            <div class="progression-help-dialog__rule">
+              <dt class="progression-help-dialog__term">等级影响</dt>
+              <dd class="progression-help-dialog__description">
+                等级只调整匹配到不同水平 AI
+                的概率，不会直接指定整桌对手强度，界面也不会公开 AI 难度。
+              </dd>
+            </div>
+            <div class="progression-help-dialog__rule">
+              <dt class="progression-help-dialog__term">手动降级</dt>
+              <dd class="progression-help-dialog__description">
+                只能选择低于当前等级的级别。降级会清空当前等级经验，之后只能通过获得经验再次自动升级。
+              </dd>
+            </div>
+          </dl>
+        </el-tab-pane>
+      </el-tabs>
     </el-dialog>
   </div>
 </template>

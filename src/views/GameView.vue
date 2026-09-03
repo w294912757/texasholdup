@@ -2,15 +2,23 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { ArrowRight, DoorOpen, Save, Volume2 } from "@lucide/vue";
+import {
+  ArrowRight,
+  ChartNoAxesCombined,
+  DoorOpen,
+  Save,
+  Volume2,
+} from "@lucide/vue";
 import PlayingCard from "@/components/PlayingCard.vue";
 import { getLegalActions, getPlayerHandType, handPot } from "@/domain/engine";
+import { calculateGtoReference } from "@/domain/gto";
 import type { LegalAction, PlayerAction, PlayerState } from "@/domain/types";
 import { useAppStore } from "@/stores/app";
 
 const store = useAppStore();
 const router = useRouter();
 const betTarget = ref(0);
+const gtoDialogOpen = ref(false);
 
 const hand = computed(() => store.session?.currentHand ?? null);
 const sortedPlayers = computed(() =>
@@ -61,6 +69,15 @@ const isFinalHand = computed(
     (hand.value?.number ?? 0) >= (store.session?.config.maxHands ?? 20) ||
     (store.humanPlayer?.stack ?? 0) === 0,
 );
+const gtoReference = computed(() =>
+  store.session ? calculateGtoReference(store.session) : null,
+);
+const gtoTooltip = computed(() => {
+  const reference = gtoReference.value;
+  if (!reference?.available || !reference.primaryAction)
+    return reference?.status;
+  return `${reference.primaryAction.label} ${reference.primaryAction.frequency}%`;
+});
 
 watch(
   aggressiveAction,
@@ -74,20 +91,13 @@ onMounted(() => {
   if (!store.session) void router.replace("/");
 });
 
-function visualPosition(index: number, total: number): number {
-  const positions: Record<number, number[]> = {
-    2: [0, 3],
-    3: [0, 2, 4],
-    4: [0, 2, 3, 4],
-    5: [0, 1, 2, 4, 5],
-    6: [0, 1, 2, 3, 4, 5],
-  };
-  return positions[total]?.[index] ?? index;
-}
-
 function playerCardsVisible(player: PlayerState): boolean {
   if (player.isHuman) return true;
   return hand.value?.phase === "complete" && !player.folded;
+}
+
+function formatPercent(value: number | null): string {
+  return value === null ? "--" : `${Math.round(value * 100)}%`;
 }
 
 function playerHandType(player: PlayerState): string | null {
@@ -197,6 +207,15 @@ async function proceed(): Promise<void> {
         >
           <Volume2 class="game-toolbar__icon" :size="18" aria-hidden="true" />
         </button>
+        <el-tooltip :content="gtoTooltip" placement="bottom">
+          <el-button
+            class="game-toolbar__gto"
+            :icon="ChartNoAxesCombined"
+            @click="gtoDialogOpen = true"
+          >
+            <span class="game-toolbar__gto-label">GTO 参考</span>
+          </el-button>
+        </el-tooltip>
         <el-button
           class="game-toolbar__leave"
           :icon="DoorOpen"
@@ -209,82 +228,91 @@ async function proceed(): Promise<void> {
     </div>
 
     <div class="game-layout">
-      <section class="poker-table" aria-label="德州扑克牌桌">
-        <div class="poker-table__felt">
-          <div class="poker-table__seats">
-            <article
-              v-for="(player, index) in sortedPlayers"
-              :key="player.id"
-              class="poker-seat"
-              :class="[
-                `poker-seat--position-${visualPosition(index, sortedPlayers.length)}`,
-                player.isHuman ? 'poker-seat--human' : 'poker-seat--opponent',
-                {
-                  'poker-seat--acting': player.seat === hand.currentSeat,
-                  'poker-seat--folded': player.folded,
-                  'poker-seat--winner':
-                    hand.phase === 'complete' &&
-                    hand.winnerIds.includes(player.id),
-                },
-              ]"
-            >
-              <div class="poker-seat__identity">
-                <span class="poker-seat__avatar">{{
-                  player.name.slice(0, 1).toUpperCase()
-                }}</span>
-                <div class="poker-seat__copy">
-                  <strong class="poker-seat__name">{{ player.name }}</strong>
-                  <span class="poker-seat__stack">{{
-                    player.stack.toLocaleString()
-                  }}</span>
-                </div>
+      <section class="round-overview" aria-label="当前牌局信息">
+        <div class="round-overview__board">
+          <div class="round-overview__pot">
+            <span class="round-overview__pot-label">底池</span>
+            <strong class="round-overview__pot-value">{{
+              pot.toLocaleString()
+            }}</strong>
+          </div>
+          <div class="community-cards" aria-label="公共牌">
+            <PlayingCard
+              v-for="cardIndex in 5"
+              :key="cardIndex"
+              class="community-cards__card"
+              :card="hand.board[cardIndex - 1]"
+            />
+          </div>
+        </div>
+
+        <div class="player-list" role="list" aria-label="玩家列表">
+          <div class="player-list__header" aria-hidden="true">
+            <span class="player-list__header-player">玩家</span>
+            <span class="player-list__header-stack">筹码</span>
+            <span class="player-list__header-cards">手牌</span>
+            <span class="player-list__header-state">状态</span>
+          </div>
+          <article
+            v-for="player in sortedPlayers"
+            :key="player.id"
+            class="player-row"
+            :class="[
+              player.isHuman ? 'player-row--human' : 'player-row--opponent',
+              {
+                'player-row--acting': player.seat === hand.currentSeat,
+                'player-row--folded': player.folded,
+                'player-row--winner':
+                  hand.phase === 'complete' &&
+                  hand.winnerIds.includes(player.id),
+              },
+            ]"
+            role="listitem"
+          >
+            <div class="player-row__identity">
+              <span class="player-row__avatar">{{
+                player.name.slice(0, 1).toUpperCase()
+              }}</span>
+              <div class="player-row__identity-copy">
+                <strong class="player-row__name">{{ player.name }}</strong>
+                <span class="player-row__position">
+                  座位 {{ player.seat + 1 }}
+                  <span
+                    v-if="player.seat === hand.dealerSeat"
+                    class="player-row__dealer"
+                    >D</span
+                  >
+                </span>
               </div>
-              <div class="poker-seat__cards">
-                <PlayingCard
-                  v-for="cardIndex in 2"
-                  :key="cardIndex"
-                  class="poker-seat__card"
-                  :card="player.holeCards[cardIndex - 1]"
-                  :hidden="!playerCardsVisible(player)"
-                  compact
-                />
-              </div>
+            </div>
+            <strong class="player-row__stack">{{
+              player.stack.toLocaleString()
+            }}</strong>
+            <div class="player-row__cards">
+              <PlayingCard
+                v-for="cardIndex in 2"
+                :key="cardIndex"
+                class="player-row__card"
+                :card="player.holeCards[cardIndex - 1]"
+                :hidden="!playerCardsVisible(player)"
+                compact
+              />
+            </div>
+            <div class="player-row__state">
               <span
                 v-if="playerHandTypeVisible(player) && playerHandType(player)"
-                class="poker-seat__hand-type"
+                class="player-row__hand-type"
               >
                 {{ playerHandType(player) }}
               </span>
-              <span v-if="player.committedRound > 0" class="poker-seat__bet"
-                >下注 {{ player.committedRound }}</span
-              >
-              <span v-if="player.lastAction" class="poker-seat__action">{{
-                player.lastAction
-              }}</span>
-              <span
-                v-if="player.seat === hand.dealerSeat"
-                class="poker-seat__dealer"
-                >D</span
-              >
-            </article>
-          </div>
-
-          <div class="poker-table__center">
-            <div class="poker-table__pot">
-              <span class="poker-table__pot-label">底池</span>
-              <strong class="poker-table__pot-value">{{
-                pot.toLocaleString()
-              }}</strong>
+              <span v-if="player.committedRound > 0" class="player-row__bet">
+                下注 {{ player.committedRound }}
+              </span>
+              <span v-if="player.lastAction" class="player-row__action">
+                {{ player.lastAction }}
+              </span>
             </div>
-            <div class="community-cards" aria-label="公共牌">
-              <PlayingCard
-                v-for="cardIndex in 5"
-                :key="cardIndex"
-                class="community-cards__card"
-                :card="hand.board[cardIndex - 1]"
-              />
-            </div>
-          </div>
+          </article>
         </div>
       </section>
 
@@ -379,6 +407,74 @@ async function proceed(): Promise<void> {
         >
       </div>
     </section>
+
+    <el-dialog
+      v-model="gtoDialogOpen"
+      class="gto-dialog"
+      title="GTO 参考"
+      append-to-body
+    >
+      <div v-if="gtoReference" class="gto-reference">
+        <div class="gto-reference__summary">
+          <div class="gto-reference__metric">
+            <span class="gto-reference__metric-label">当前牌型</span>
+            <strong class="gto-reference__metric-value">{{
+              gtoReference.handType ?? "--"
+            }}</strong>
+          </div>
+          <div class="gto-reference__metric">
+            <span class="gto-reference__metric-label">估算权益</span>
+            <strong class="gto-reference__metric-value">{{
+              formatPercent(gtoReference.equity)
+            }}</strong>
+          </div>
+          <div class="gto-reference__metric">
+            <span class="gto-reference__metric-label">底池赔率</span>
+            <strong class="gto-reference__metric-value">{{
+              formatPercent(gtoReference.potOdds)
+            }}</strong>
+          </div>
+          <div class="gto-reference__metric">
+            <span class="gto-reference__metric-label">SPR</span>
+            <strong class="gto-reference__metric-value">{{
+              gtoReference.stackToPot?.toFixed(1) ?? "--"
+            }}</strong>
+          </div>
+        </div>
+
+        <div v-if="gtoReference.available" class="gto-reference__mix">
+          <div
+            v-for="action in gtoReference.actions"
+            :key="action.type"
+            class="gto-reference__action"
+          >
+            <div class="gto-reference__action-heading">
+              <span class="gto-reference__action-label">{{
+                action.label
+              }}</span>
+              <strong class="gto-reference__action-frequency"
+                >{{ action.frequency }}%</strong
+              >
+            </div>
+            <progress
+              class="gto-reference__action-progress"
+              :class="`gto-reference__action-progress--${action.type}`"
+              :value="action.frequency"
+              max="100"
+              :aria-label="`${action.label} ${action.frequency}%`"
+            ></progress>
+          </div>
+        </div>
+        <div v-else class="gto-reference__empty">
+          {{ gtoReference.status }}
+        </div>
+
+        <p class="gto-reference__notice">
+          本地近似策略，使用未知牌随机模拟 {{ gtoReference.sampleCount }}
+          次并结合底池赔率与 SPR 计算，不等同于完整 GTO 求解器结果。
+        </p>
+      </div>
+    </el-dialog>
   </div>
 
   <div v-else class="game-empty">
