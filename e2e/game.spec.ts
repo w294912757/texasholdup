@@ -107,12 +107,12 @@ async function startGame(page: Page): Promise<void> {
   await expect(page.locator(".account-switcher__name")).toHaveText("admin");
   await page.locator(".match-form__submit").click();
   await expect(page).toHaveURL(/#\/game/);
-  await expect(page.locator(".poker-table")).toBeVisible();
+  await expect(page.locator(".round-overview")).toBeVisible();
   await expect(page.locator(".decision-panel__actions")).toBeVisible({
     timeout: 15_000,
   });
   await expect(
-    page.locator(".poker-seat--opponent .poker-seat__hand-type"),
+    page.locator(".player-row--opponent .player-row__hand-type"),
   ).toHaveCount(0);
 }
 
@@ -121,16 +121,16 @@ async function expectReadableCards(
   communitySize: { width: number; height: number },
 ): Promise<void> {
   const communityCard = page.locator(".community-cards .playing-card").first();
-  const holeCard = page.locator(".poker-seat--human .playing-card").first();
+  const holeCard = page.locator(".player-row--human .playing-card").first();
   await expect(communityCard).toHaveCSS("width", `${communitySize.width}px`);
   await expect(communityCard).toHaveCSS("height", `${communitySize.height}px`);
   await expect(holeCard).toHaveCSS("width", "34px");
   await expect(holeCard).toHaveCSS("height", "48px");
   await expect(
-    page.locator(".poker-seat--human .playing-card__rank").first(),
+    page.locator(".player-row--human .playing-card__rank").first(),
   ).toHaveCSS("font-size", "13px");
   await expect(
-    page.locator(".poker-seat--human .playing-card__suit").first(),
+    page.locator(".player-row--human .playing-card__suit").first(),
   ).toHaveCSS("font-size", "18px");
 }
 
@@ -139,6 +139,10 @@ test("restores the exact saved scene and remains playable", async ({
 }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await startGame(page);
+  await page.locator(".game-toolbar__gto").hover();
+  await expect(
+    page.locator(".el-popper").filter({ hasText: "%" }).last(),
+  ).toBeVisible();
   const beforeReload = await readSavedScene(page);
   await page.screenshot({
     path: "test-results/table-desktop.png",
@@ -168,7 +172,7 @@ test("supports compact and narrow gameplay without horizontal overflow", async (
     path: "test-results/table-compact.png",
     fullPage: true,
   });
-  await expectReadableCards(page, { width: 56, height: 80 });
+  await expectReadableCards(page, { width: 44, height: 64 });
   expect(
     await page.evaluate(() => {
       const betControl = document
@@ -191,6 +195,7 @@ test("supports compact and narrow gameplay without horizontal overflow", async (
   await page.setViewportSize({ width: 360, height: 640 });
   await expect(page.locator(".community-cards")).toBeVisible();
   await expect(page.locator(".decision-panel__actions")).toBeVisible();
+  await expect(page.locator(".player-row")).toHaveCount(6);
   await page.screenshot({
     path: "test-results/table-mobile.png",
     fullPage: true,
@@ -202,6 +207,19 @@ test("supports compact and narrow gameplay without horizontal overflow", async (
     ),
   ).toBe(true);
   await expect(page.locator(".decision-panel")).toBeInViewport();
+  await page.locator(".game-toolbar__gto").click();
+  await expect(page.locator(".gto-dialog")).toBeVisible();
+  await expect(page.locator(".gto-reference__action").first()).toBeVisible();
+  await page.waitForTimeout(350);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "test-results/gto-mobile.png",
+    fullPage: true,
+  });
 });
 
 test("leaving forfeits committed chips and creates a different match", async ({
@@ -235,21 +253,24 @@ test("starts the next hand after a completed hand", async ({ page }) => {
   await expect(page.locator(".decision-panel__result")).toBeVisible({
     timeout: 15_000,
   });
-  const winnerSeats = page.locator(".poker-seat--winner");
+  const winnerSeats = page.locator(".player-row--winner");
   expect(await winnerSeats.count()).toBeGreaterThan(0);
-  await expect(winnerSeats.first()).toHaveCSS(
-    "border-color",
-    "rgb(79, 209, 154)",
-  );
+  expect(
+    await winnerSeats
+      .first()
+      .evaluate((element) =>
+        getComputedStyle(element).boxShadow.includes("79, 209, 154"),
+      ),
+  ).toBe(true);
   expect(
     await page
       .locator(
-        ".poker-seat--opponent:not(.poker-seat--folded) .poker-seat__hand-type",
+        ".player-row--opponent:not(.player-row--folded) .player-row__hand-type",
       )
       .count(),
   ).toBe(
     await page
-      .locator(".poker-seat--opponent:not(.poker-seat--folded)")
+      .locator(".player-row--opponent:not(.player-row--folded)")
       .count(),
   );
   await page.screenshot({
@@ -257,6 +278,7 @@ test("starts the next hand after a completed hand", async ({ page }) => {
     fullPage: true,
   });
   await page.setViewportSize({ width: 640, height: 520 });
+  await winnerSeats.first().scrollIntoViewIfNeeded();
   await expect(winnerSeats.first()).toBeInViewport();
   await page.screenshot({
     path: "test-results/table-winner-highlight-compact.png",
@@ -274,12 +296,12 @@ test("starts the next hand after a completed hand", async ({ page }) => {
   await expect(page.locator(".decision-panel__result")).toBeVisible({
     timeout: 15_000,
   });
-  expect(await page.locator(".poker-seat--winner").count()).toBeGreaterThan(0);
+  expect(await page.locator(".player-row--winner").count()).toBeGreaterThan(0);
   await page.locator(".decision-panel__next").click();
   await expect(page.locator(".game-toolbar__hand")).toContainText("2 / 20", {
     timeout: 15_000,
   });
-  await expect(page.locator(".poker-seat--winner")).toHaveCount(0);
+  await expect(page.locator(".player-row--winner")).toHaveCount(0);
   await expect(page.locator(".el-message__content")).toContainText("离桌");
   await expect(page.locator(".el-message")).toBeInViewport();
   await page.waitForTimeout(250);
@@ -334,14 +356,16 @@ test("creates another account and returns to the saved admin table", async ({
   await expect(page.locator(".resume-session__button")).toBeVisible();
   await page.locator(".resume-session__button").click();
   await expect(page).toHaveURL(/#\/game/);
-  await expect(page.locator(".poker-table")).toBeVisible();
+  await expect(page.locator(".round-overview")).toBeVisible();
 });
 
 test("replays an archived hand one action at a time", async ({ page }) => {
   await startGame(page);
   await page.locator(".game-toolbar__leave").click();
   await page.locator(".el-message-box__btns .el-button--primary").click();
-  await expect(page.locator(".poker-table")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(".round-overview")).toBeVisible({
+    timeout: 15_000,
+  });
   await page
     .locator(".application-navigation__button")
     .filter({ hasText: "记录" })
@@ -366,7 +390,9 @@ test("keeps annotations and statistics isolated between accounts", async ({
   await startGame(page);
   await page.locator(".game-toolbar__leave").click();
   await page.locator(".el-message-box__btns .el-button--primary").click();
-  await expect(page.locator(".poker-table")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(".round-overview")).toBeVisible({
+    timeout: 15_000,
+  });
 
   await page
     .locator(".application-navigation__button")
@@ -480,17 +506,37 @@ test("keeps annotations and statistics isolated between accounts", async ({
   await expect(page.locator(".history-table__favorite--active")).toHaveCount(1);
 });
 
-test("shows the implemented experience and upgrade rules", async ({ page }) => {
+test("shows AI matching by default and keeps the upgrade rules", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 360, height: 640 });
   await page.goto("/");
   await page.getByRole("button", { name: "查看经验与升级规则" }).click();
   const dialog = page.locator(".progression-help-dialog");
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("tab", { name: "AI 匹配" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(dialog).toContainText("当前可匹配范围");
+  await expect(dialog).toContainText("1–3 档");
+  await expect(dialog).toContainText("1–12 档");
+  await expect(dialog).toContainText("85%");
+  await expect(dialog).toContainText("15%");
+  await expect(dialog).toContainText("基础");
+  await expect(dialog).toContainText("专家");
+  await expect(dialog).toContainText("不会显示任何 AI 的实际档位");
+  await dialog.getByRole("tab", { name: "经验规则" }).click();
   await expect(dialog).toContainText("正常完成 20 手牌");
   await expect(dialog).toContainText("净盈利 ÷ 10");
   await expect(dialog).toContainText("当前等级 × 100 XP");
   await expect(dialog).toContainText("只能选择低于当前等级");
   await expect(dialog).toBeInViewport();
+  expect(
+    await page.evaluate(() =>
+      Math.max(document.body.scrollWidth, document.documentElement.scrollWidth),
+    ),
+  ).toBeLessThanOrEqual(360);
 });
 
 test("persists account-scoped game settings and applies card styling", async ({
@@ -525,7 +571,7 @@ test("persists account-scoped game settings and applies card styling", async ({
     /application-shell--cards-high-contrast/,
   );
   await expect(
-    page.locator(".poker-seat--human .playing-card").first(),
+    page.locator(".player-row--human .playing-card").first(),
   ).toHaveCSS("border-top-width", "2px");
   expect(
     await page.evaluate(

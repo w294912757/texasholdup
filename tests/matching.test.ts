@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   difficultyBandForTier,
+  getAiMatchingGuide,
   matchAiProfiles,
   matchReplacementAiProfile,
   publicAiProfile,
@@ -25,7 +26,9 @@ describe("probability-based matching", () => {
     const stronger = profiles.filter(
       (profile) => profile?.band === "higher",
     ).length;
-    expect(stronger).toBeGreaterThan(80);
+    expect(stronger).toBeGreaterThan(40);
+    expect(stronger).toBeLessThan(90);
+    expect(Math.max(...profiles.map((profile) => profile?.tier ?? 0))).toBe(3);
   });
 
   it("lets high-level players encounter weaker opponents", () => {
@@ -67,4 +70,84 @@ describe("probability-based matching", () => {
       ).not.toBe("peer");
     }
   });
+
+  it("reports the effective matching guide from the same probability rules", () => {
+    const beginnerGuide = getAiMatchingGuide(1);
+    expect(beginnerGuide).toMatchObject({
+      playerLevel: 1,
+      scaleLevel: 1,
+      minimumTier: 1,
+      maximumTier: 3,
+    });
+    expect(beginnerGuide.bands.map((band) => band.tiers)).toEqual([
+      [],
+      [1, 2],
+      [3],
+    ]);
+    expect(beginnerGuide.bands[0]?.probability).toBe(0);
+    expect(beginnerGuide.bands[1]?.probability).toBe(0.85);
+    expect(beginnerGuide.bands[2]?.probability).toBe(0.15);
+
+    const middleGuide = getAiMatchingGuide(5);
+    expect(middleGuide).toMatchObject({
+      minimumTier: 1,
+      maximumTier: 7,
+    });
+    expect(middleGuide.bands.map((band) => band.tiers)).toEqual([
+      [1, 2, 3],
+      [4, 5, 6],
+      [7],
+    ]);
+    expect(middleGuide.bands.map((band) => band.probability)).toEqual([
+      0.15, 0.65, 0.2,
+    ]);
+
+    const aboveScaleGuide = getAiMatchingGuide(18);
+    expect(aboveScaleGuide.scaleLevel).toBe(12);
+    expect(aboveScaleGuide.minimumTier).toBe(8);
+    expect(aboveScaleGuide.maximumTier).toBe(12);
+    expect(aboveScaleGuide.bands[2]?.probability).toBe(0);
+  });
+
+  it.each([
+    [1, 1, 3, [0, 0.85, 0.15]],
+    [2, 1, 4, [0, 0.8, 0.2]],
+    [3, 1, 5, [0.1, 0.7, 0.2]],
+    [4, 1, 6, [0.15, 0.65, 0.2]],
+    [5, 1, 7, [0.15, 0.65, 0.2]],
+    [6, 2, 8, [0.2, 0.6, 0.2]],
+    [7, 3, 9, [0.2, 0.6, 0.2]],
+    [8, 4, 10, [0.25, 0.6, 0.15]],
+    [9, 5, 11, [0.25, 0.6, 0.15]],
+    [10, 6, 12, [0.3, 0.55, 0.15]],
+    [11, 7, 12, [0.35, 0.65, 0]],
+    [12, 8, 12, [0.35, 0.65, 0]],
+  ])(
+    "uses the calibrated window and weights at level %i",
+    (level, minimumTier, maximumTier, expectedWeights) => {
+      const guide = getAiMatchingGuide(level);
+      expect(guide.minimumTier).toBe(minimumTier);
+      expect(guide.maximumTier).toBe(maximumTier);
+      guide.bands.forEach((band, index) => {
+        expect(band.probability).toBeCloseTo(expectedWeights[index] ?? 0);
+      });
+
+      const profiles = Array.from(
+        { length: 1_200 },
+        (_, seed) => matchAiProfiles(level, 1, seed)[0]!,
+      );
+      expect(Math.min(...profiles.map((profile) => profile.tier))).toBe(
+        minimumTier,
+      );
+      expect(Math.max(...profiles.map((profile) => profile.tier))).toBe(
+        maximumTier,
+      );
+      guide.bands.forEach((band) => {
+        const actualProbability =
+          profiles.filter((profile) => profile.band === band.band).length /
+          profiles.length;
+        expect(actualProbability).toBeCloseTo(band.probability, 1);
+      });
+    },
+  );
 });
