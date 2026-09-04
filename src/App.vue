@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   CircleUserRound,
+  BookOpen,
   ChartColumnIncreasing,
   Download,
   History,
@@ -14,6 +15,7 @@ import {
   Trash2,
   Upload,
   Settings,
+  HardDrive,
 } from "@lucide/vue";
 import { useAppStore } from "@/stores/app";
 
@@ -168,6 +170,7 @@ async function importAccount(event: unknown): Promise<void> {
       :class="[
         `application-shell--motion-${store.settings.animationSpeed}`,
         `application-shell--cards-${store.settings.cardStyle}`,
+        `application-shell--density-${store.settings.displayDensity}`,
       ]"
     >
       <header class="application-header">
@@ -239,6 +242,22 @@ async function importAccount(event: unknown): Promise<void> {
           <button
             class="application-navigation__button"
             :class="{
+              'application-navigation__button--active': route.name === 'rules',
+            }"
+            type="button"
+            title="规则教学"
+            @click="router.push('/rules')"
+          >
+            <BookOpen
+              class="application-navigation__icon"
+              :size="18"
+              aria-hidden="true"
+            />
+            <span class="application-navigation__label">规则</span>
+          </button>
+          <button
+            class="application-navigation__button"
+            :class="{
               'application-navigation__button--active':
                 route.name === 'settings',
             }"
@@ -252,6 +271,23 @@ async function importAccount(event: unknown): Promise<void> {
               aria-hidden="true"
             />
             <span class="application-navigation__label">设置</span>
+          </button>
+          <button
+            class="application-navigation__button"
+            :class="{
+              'application-navigation__button--active':
+                route.name === 'storage',
+            }"
+            type="button"
+            title="存储管理"
+            @click="router.push('/storage')"
+          >
+            <HardDrive
+              class="application-navigation__icon"
+              :size="18"
+              aria-hidden="true"
+            />
+            <span class="application-navigation__label">存储</span>
           </button>
         </nav>
 

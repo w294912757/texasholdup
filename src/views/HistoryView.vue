@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
+  CircleHelp,
   ChevronLeft,
   ChevronRight,
   History,
@@ -15,8 +16,17 @@ import { useAppStore } from "@/stores/app";
 import { gameRepository } from "@/persistence/repository";
 import type { HandHistoryRecord } from "@/persistence/database";
 import { createReplayFrames } from "@/domain/replay";
+import {
+  buildEquityTimeline,
+  buildHandReviewSummary,
+  findKeyDecisions,
+  simulateAlternativeActions,
+  type AlternativeActionResult,
+} from "@/domain/review";
 import { REPLAY_SPEED_MILLISECONDS } from "@/domain/settings";
 import PlayingCard from "@/components/PlayingCard.vue";
+import RuleHelpDialog from "@/components/RuleHelpDialog.vue";
+import type { RuleTopicId } from "@/domain/rules";
 
 const store = useAppStore();
 const records = ref<HandHistoryRecord[]>([]);
@@ -26,13 +36,26 @@ const selectedRecord = ref<HandHistoryRecord | null>(null);
 const replayIndex = ref(0);
 const noteDraft = ref("");
 const annotationSaving = ref(false);
+const simulationLoadingSeq = ref<number | null>(null);
+const simulationResults = ref<Record<number, AlternativeActionResult[]>>({});
 const replayPlaying = ref(false);
+const ruleHelpOpen = ref(false);
+const ruleHelpTopic = ref<RuleTopicId>("showdown");
 let replayTimer: ReturnType<typeof globalThis.setInterval> | null = null;
 const replayFrames = computed(() =>
   selectedRecord.value ? createReplayFrames(selectedRecord.value.hand) : [],
 );
 const replayFrame = computed(
   () => replayFrames.value[replayIndex.value] ?? null,
+);
+const reviewSummary = computed(() =>
+  selectedRecord.value ? buildHandReviewSummary(selectedRecord.value) : null,
+);
+const keyDecisions = computed(() =>
+  selectedRecord.value ? findKeyDecisions(selectedRecord.value) : [],
+);
+const equityTimeline = computed(() =>
+  selectedRecord.value ? buildEquityTimeline(selectedRecord.value) : [],
 );
 
 const filteredRecords = computed(() => {
@@ -68,6 +91,59 @@ function openRecord(record: HandHistoryRecord): void {
   selectedRecord.value = record;
   noteDraft.value = record.note;
   replayIndex.value = 0;
+  simulationResults.value = {};
+  if (store.account) {
+    void gameRepository
+      .listReviewSimulations(store.account.id, record.id)
+      .then((items) => {
+        simulationResults.value = Object.fromEntries(
+          items.map((item) => [item.decisionSeq, item.result]),
+        );
+      });
+  }
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function actionLabel(action: string): string {
+  if (action === "fold") return "弃牌";
+  if (action === "check") return "过牌";
+  if (action === "call") return "跟注";
+  if (action === "all-in") return "全下";
+  if (action === "bet") return "下注";
+  return "加注";
+}
+
+function openRuleHelp(topicId: RuleTopicId): void {
+  ruleHelpTopic.value = topicId;
+  ruleHelpOpen.value = true;
+}
+
+async function simulateDecision(
+  decision: (typeof keyDecisions.value)[number],
+): Promise<void> {
+  if (!selectedRecord.value || !store.account) return;
+  simulationLoadingSeq.value = decision.seq;
+  try {
+    const result = simulateAlternativeActions(selectedRecord.value, decision);
+    await gameRepository.saveReviewSimulation(
+      store.account.id,
+      selectedRecord.value.id,
+      decision.seq,
+      result,
+    );
+    simulationResults.value = {
+      ...simulationResults.value,
+      [decision.seq]: result,
+    };
+    ElMessage.success("替代行动模拟已保存");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "模拟失败");
+  } finally {
+    simulationLoadingSeq.value = null;
+  }
 }
 
 function replaceRecord(updated: HandHistoryRecord): void {
@@ -308,6 +384,163 @@ onBeforeUnmount(stopReplay);
         </el-button>
       </section>
 
+      <section
+        v-if="selectedRecord && reviewSummary"
+        class="history-review"
+        aria-label="复盘摘要"
+      >
+        <h3 class="history-review__title">复盘摘要</h3>
+        <div class="history-review__metrics">
+          <div class="history-review__metric">
+            <span class="history-review__label">总投入</span>
+            <strong>{{ reviewSummary.totalInvested }}</strong>
+          </div>
+          <div class="history-review__metric">
+            <span class="history-review__label">总赢取</span>
+            <strong>{{ reviewSummary.totalWon }}</strong>
+          </div>
+          <div class="history-review__metric">
+            <span class="history-review__label">净输赢</span>
+            <strong
+              :class="{
+                'history-review__value--positive': reviewSummary.netResult > 0,
+                'history-review__value--negative': reviewSummary.netResult < 0,
+              }"
+            >
+              {{ reviewSummary.netResult }}
+            </strong>
+          </div>
+          <div class="history-review__metric">
+            <span class="history-review__label">最大底池</span>
+            <strong>{{ reviewSummary.maxPot }}</strong>
+          </div>
+          <div class="history-review__metric">
+            <span class="history-review__label">最大单手赢取</span>
+            <strong>{{ reviewSummary.maxSingleWin }}</strong>
+          </div>
+          <div class="history-review__metric">
+            <span class="history-review__label">主动入池率</span>
+            <strong>{{ formatPercent(reviewSummary.vpip) }}</strong>
+          </div>
+          <div class="history-review__metric">
+            <span class="history-review__label">加注率</span>
+            <strong>{{ formatPercent(reviewSummary.raiseRate) }}</strong>
+          </div>
+          <div class="history-review__metric">
+            <span class="history-review__label">跟注率</span>
+            <strong>{{ formatPercent(reviewSummary.callRate) }}</strong>
+          </div>
+          <div class="history-review__metric">
+            <span class="history-review__label">弃牌率</span>
+            <strong>{{ formatPercent(reviewSummary.foldRate) }}</strong>
+          </div>
+          <div class="history-review__metric">
+            <span class="history-review__label">摊牌胜率</span>
+            <strong>{{ formatPercent(reviewSummary.showdownWinRate) }}</strong>
+          </div>
+          <div class="history-review__metric">
+            <button
+              class="history-review__rule-link"
+              type="button"
+              @click="openRuleHelp('showdown')"
+            >
+              摊牌
+              <CircleHelp
+                class="history-review__rule-icon"
+                :size="13"
+                aria-hidden="true"
+              />
+            </button>
+            <strong>{{ reviewSummary.showdown ? "是" : "否" }}</strong>
+          </div>
+        </div>
+
+        <div class="history-review__section">
+          <h4 class="history-review__subtitle">关键决策</h4>
+          <p v-if="!keyDecisions.length" class="history-review__empty">
+            本手没有达到标记阈值的决策。
+          </p>
+          <div
+            v-for="decision in keyDecisions"
+            :key="decision.seq"
+            class="history-review-decision"
+          >
+            <button
+              class="history-review-decision__copy"
+              type="button"
+              @click="
+                replayIndex = selectedRecord.hand.events.findIndex(
+                  (event) => event.seq === decision.seq,
+                )
+              "
+            >
+              <strong>行动 {{ decision.seq }} · {{ decision.phase }}</strong>
+              <span
+                >{{ decision.reasons.join("、") }} ·
+                {{ actionLabel(decision.action) }} · 投入
+                {{ decision.amount }}</span
+              >
+            </button>
+            <el-button
+              class="history-review-decision__simulate"
+              size="small"
+              :loading="simulationLoadingSeq === decision.seq"
+              @click="simulateDecision(decision)"
+            >
+              模拟其他行动
+            </el-button>
+            <div
+              v-if="simulationResults[decision.seq]"
+              class="history-review-decision__results"
+            >
+              <span
+                v-for="result in simulationResults[decision.seq]"
+                :key="result.action"
+                class="history-review-decision__result"
+              >
+                {{ result.action }} {{ formatPercent(result.equity) }} / EV
+                {{ result.expectedValue }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="history-review__section">
+          <div class="history-review__subtitle-row">
+            <h4 class="history-review__subtitle">权益与底池赔率（估算）</h4>
+            <button
+              class="history-review__rule-help"
+              type="button"
+              title="查看底池赔率规则"
+              @click="openRuleHelp('pot-odds')"
+            >
+              <CircleHelp
+                class="history-review__rule-icon"
+                :size="15"
+                aria-hidden="true"
+              />
+            </button>
+          </div>
+          <div v-if="!equityTimeline.length" class="history-review__empty">
+            暂无可计算的公开信息节点。
+          </div>
+          <div v-else class="history-review-equity">
+            <div
+              v-for="point in equityTimeline"
+              :key="point.seq"
+              class="history-review-equity__point"
+            >
+              <span>行动 {{ point.seq }} · {{ point.phase }}</span>
+              <strong>{{ formatPercent(point.equity) }}</strong>
+              <span
+                >底池赔率 {{ formatPercent(point.potOdds) }} · SPR
+                {{ point.stackToPot.toFixed(1) }}</span
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+
       <div v-if="selectedRecord && replayFrame" class="history-replay">
         <div class="history-replay__status">
           <span class="history-replay__step">
@@ -419,5 +652,6 @@ onBeforeUnmount(stopReplay);
         </li>
       </ol>
     </el-drawer>
+    <RuleHelpDialog v-model="ruleHelpOpen" :topic-id="ruleHelpTopic" />
   </div>
 </template>

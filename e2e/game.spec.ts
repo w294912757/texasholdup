@@ -373,6 +373,10 @@ test("replays an archived hand one action at a time", async ({ page }) => {
   await expect(page.locator(".history-table")).toBeVisible();
   await page.locator(".history-table .el-table__row").first().click();
   await expect(page.locator(".history-replay")).toBeVisible();
+  await page.locator(".history-review__rule-help").click();
+  await expect(page.locator(".rule-help-dialog__title")).toHaveText("底池赔率");
+  await page.locator(".rule-help-dialog .el-dialog__headerbtn").click();
+  await expect(page.locator(".history-replay")).toBeVisible();
   await expect(page.locator(".history-replay__step")).toContainText("行动 1 /");
   await page.getByTitle("下一步").click();
   await expect(page.locator(".history-replay__step")).toContainText("行动 2 /");
@@ -382,6 +386,146 @@ test("replays an archived hand one action at a time", async ({ page }) => {
   expect(
     await page.locator(".history-replay-player--winner").count(),
   ).toBeGreaterThan(0);
+});
+
+test("persists training progress without replacing the active cash game", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 640 });
+  await startGame(page);
+  const cashGameBefore = await readSavedScene(page);
+  await page.locator(".application-brand").click();
+  await page
+    .locator(".profile-overview__command")
+    .filter({ hasText: "决策训练" })
+    .click();
+  await expect(page).toHaveURL(/#\/training/);
+  await page.locator(".training-setup__start").click();
+  await expect(page.locator(".training-scenario")).toBeVisible();
+  await page.locator(".training-decision__action").first().click();
+  await page.locator(".training-decision__submit").click();
+  await expect(page.locator(".training-feedback")).toBeVisible();
+  await expect(page.locator(".training-decision__action--correct")).toHaveCount(
+    1,
+  );
+  await expect(
+    page.locator(".training-decision__answer-label", {
+      hasText: "正确答案",
+    }),
+  ).toBeVisible();
+  await expect(page.locator(".training-feedback__reason")).toBeVisible();
+  await page.reload();
+  await expect(page.locator(".training-feedback")).toBeVisible();
+  await expect(page.locator(".training-decision__action--correct")).toHaveCount(
+    1,
+  );
+  await expect(page.locator(".training-feedback__reason-copy")).not.toBeEmpty();
+  await expect(page.locator(".training-progress__step")).toContainText(
+    "第 1 / 10 题",
+  );
+  await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
+  expect(await readSavedScene(page)).toEqual(cashGameBefore);
+});
+
+test("manages local snapshots and exports without changing the active game", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 640 });
+  await startGame(page);
+  const before = await readSavedScene(page);
+  await page.getByTitle("存储管理").click();
+  await expect(page).toHaveURL(/#\/storage/);
+  await expect(page.locator(".storage-summary")).toBeVisible();
+  await page
+    .locator(".storage-section__button")
+    .filter({ hasText: "创建快照" })
+    .click();
+  await expect(page.locator(".storage-snapshot")).toHaveCount(1);
+  await page.locator(".storage-retention__control").getByText("1").click();
+  const downloadPromise = page.waitForEvent("download");
+  await page
+    .locator(".storage-section__button")
+    .filter({ hasText: "导出 JSON" })
+    .click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^holdup-local-.*\.json$/);
+  const downloadPath = await download.path();
+  expect(downloadPath).not.toBeNull();
+  if (!downloadPath) throw new Error("备份下载文件不可用");
+  await page.locator(".storage-import__input").setInputFiles(downloadPath);
+  await expect(page.locator(".storage-import__manifest")).toBeVisible();
+  await expect(page.locator(".storage-import__manifest-meta")).toContainText(
+    "1 个账号",
+  );
+  await expect(page.locator(".storage-snapshot")).toHaveCount(1);
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 1024, height: 768 },
+    { width: 640, height: 520 },
+    { width: 360, height: 640 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(page.locator(".storage-cleanup__account")).toBeVisible();
+    await expect(page.locator(".storage-cleanup__date")).toBeVisible();
+    await expect(page.locator(".storage-cleanup__preview")).toBeVisible();
+    const hasOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth,
+    );
+    expect(hasOverflow).toBe(false);
+  }
+  await page.locator(".application-brand").click();
+  await page.locator(".resume-session__button").click();
+  expect(await readSavedScene(page)).toEqual(before);
+});
+
+test("opens local rules from the center, action area and GTO without changing the game", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await startGame(page);
+  const before = await readSavedScene(page);
+
+  await page.locator(".decision-panel__rule-help").click();
+  await expect(page.locator(".rule-help-dialog__title")).toHaveText(
+    "行动与下注轮",
+  );
+  await page.locator(".rule-help-dialog__open-center").click();
+  await expect(page).toHaveURL(/#\/rules\?topic=actions/);
+  await expect(page.locator(".rules-article__title")).toHaveText(
+    "行动与下注轮",
+  );
+  await page.locator(".rules-controls__search input").fill("101 筹码");
+  await expect(page.locator(".rules-index__topic")).toHaveCount(1);
+  await expect(page.locator(".rules-article__title")).toHaveText("余数筹码");
+
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 1024, height: 768 },
+    { width: 640, height: 520 },
+    { width: 360, height: 640 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(page.locator(".rules-controls__search")).toBeVisible();
+    await expect(page.locator(".rules-article")).toBeVisible();
+    await page.screenshot({
+      path: `test-results/rules-${viewport.width}x${viewport.height}.png`,
+      fullPage: true,
+    });
+    const hasOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth,
+    );
+    expect(hasOverflow).toBe(false);
+  }
+
+  await page.locator(".application-brand").click();
+  await page.locator(".resume-session__button").click();
+  await page.locator(".game-toolbar__gto").click();
+  await page
+    .locator(".gto-reference__metric-help", { hasText: "底池赔率" })
+    .click();
+  await expect(page.locator(".rule-help-dialog__title")).toHaveText("底池赔率");
+  await page.locator(".rule-help-dialog .el-dialog__headerbtn").click();
+  expect(await readSavedScene(page)).toEqual(before);
 });
 
 test("keeps annotations and statistics isolated between accounts", async ({
@@ -410,9 +554,9 @@ test("keeps annotations and statistics isolated between accounts", async ({
     .locator(".history-annotation__input textarea")
     .fill("复盘：注意翻牌前投入");
   await drawer.getByRole("button", { name: "保存备注" }).click();
-  await expect(page.locator(".el-message__content")).toContainText(
-    "备注已保存",
-  );
+  await expect(
+    page.locator(".el-message__content", { hasText: "备注已保存" }),
+  ).toBeVisible();
   await page.keyboard.press("Escape");
 
   await page
@@ -551,11 +695,18 @@ test("persists account-scoped game settings and applies card styling", async ({
     .locator(".el-select")
     .click();
   await page.getByRole("option", { name: "即时" }).click();
-  await page
+  const highContrastOption = page
     .locator(".settings-row")
     .filter({ hasText: "牌面样式" })
-    .getByText("高对比", { exact: true })
-    .click();
+    .locator(".el-segmented__item")
+    .filter({ hasText: "高对比" });
+  await highContrastOption.hover();
+  await expect(highContrastOption).toHaveCSS("color", "rgb(255, 255, 255)");
+  await expect(highContrastOption).toHaveCSS(
+    "background-color",
+    "rgb(53, 69, 63)",
+  );
+  await highContrastOption.click();
   await expect(page.locator(".el-message__content").last()).toContainText(
     "设置已保存",
   );
@@ -573,9 +724,124 @@ test("persists account-scoped game settings and applies card styling", async ({
   await expect(
     page.locator(".player-row--human .playing-card").first(),
   ).toHaveCSS("border-top-width", "2px");
+  const humanCard = page.locator(".player-row--human .playing-card").first();
+  await expect(humanCard).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await expect(humanCard.locator(".playing-card__rank")).not.toBeEmpty();
+  await expect(humanCard.locator(".playing-card__suit")).not.toBeEmpty();
+  const hiddenAiCards = page.locator(
+    ".player-row--opponent .playing-card--hidden",
+  );
+  expect(await hiddenAiCards.count()).toBeGreaterThan(0);
+  for (const card of await hiddenAiCards.all()) {
+    await expect(card).toHaveAttribute("aria-label", "未公开的牌");
+    await expect(card.locator(".playing-card__rank")).toHaveCount(0);
+    await expect(card.locator(".playing-card__suit")).toHaveCount(0);
+    await expect(card).toHaveCSS("border-top-color", "rgb(245, 255, 249)");
+    expect(
+      await card.evaluate(
+        (element) => getComputedStyle(element).backgroundImage,
+      ),
+    ).toContain("repeating-linear-gradient");
+  }
+  await page.screenshot({
+    path: "test-results/cards-high-contrast-360x640.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.screenshot({
+    path: "test-results/cards-high-contrast-1366x768.png",
+    fullPage: true,
+  });
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
   ).toBe(true);
+});
+
+test("manages account presets and changes display density without touching the saved game", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 640 });
+  await page.goto("/");
+  await page.locator(".preset-toolbar__select").click();
+  await page.getByRole("option", { name: "快速练习", exact: true }).click();
+  await expect(page.locator(".match-form__summary-text")).toContainText(
+    "3 人桌",
+  );
+  await expect(page.locator(".match-form__number input")).toHaveValue("500");
+  await expect(page.locator(".application-shell")).toHaveClass(
+    /application-shell--density-compact/,
+  );
+
+  await page.locator(".preset-toolbar__manage").click();
+  await page.locator(".preset-manager__create").click();
+  await page.locator(".el-message-box__input input").fill("移动练习");
+  await page.locator(".el-message-box__btns .el-button--primary").click();
+  const customRows = page.locator(".preset-manager__item--custom");
+  await expect(customRows).toHaveCount(1);
+  await customRows.first().getByTitle("重命名预设").click();
+  await page.locator(".el-message-box__input input").fill("竖屏练习");
+  await page.locator(".el-message-box__btns .el-button--primary").click();
+  await expect(customRows.first()).toContainText("竖屏练习");
+  await customRows.first().getByTitle("复制预设").click();
+  await page.locator(".el-message-box__input input").fill("练习副本");
+  await page.locator(".el-message-box__btns .el-button--primary").click();
+  await expect(customRows).toHaveCount(2);
+  await customRows.last().getByTitle("删除预设").click();
+  await page.locator(".el-message-box__btns .el-button--primary").click();
+  await expect(customRows).toHaveCount(1);
+  await page.locator(".preset-manager-dialog .el-dialog__headerbtn").click();
+
+  await page.reload();
+  await page.locator(".preset-toolbar__manage").click();
+  await expect(page.locator(".preset-manager__item--custom")).toContainText(
+    "竖屏练习",
+  );
+  await page.locator(".preset-manager-dialog .el-dialog__headerbtn").click();
+  await page.locator(".preset-toolbar__select").click();
+  await page.getByRole("option", { name: "竖屏练习", exact: true }).click();
+  await page.locator(".match-form__submit").click();
+  await expect(page).toHaveURL(/#\/game/);
+  await expect(page.locator(".player-row")).toHaveCount(3);
+  await expect(page.locator(".decision-panel__actions")).toBeVisible({
+    timeout: 15_000,
+  });
+  const beforeDensityChange = await readSavedScene(page);
+
+  await page.getByTitle("游戏设置").click();
+  const portraitDensity = page
+    .locator(".settings-row")
+    .filter({ hasText: "显示密度" })
+    .locator(".el-segmented__item")
+    .filter({ hasText: "竖屏" });
+  await portraitDensity.click();
+  await expect(page.locator(".application-shell")).toHaveClass(
+    /application-shell--density-portrait/,
+  );
+  expect(await readSavedScene(page)).toEqual(beforeDensityChange);
+  await page.locator(".application-brand").click();
+  await page.locator(".resume-session__button").click();
+  expect(await readSavedScene(page)).toEqual(beforeDensityChange);
+  await expect(page.locator(".action-history")).toBeHidden();
+
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 1024, height: 768 },
+    { width: 640, height: 520 },
+    { width: 360, height: 640 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(page.locator(".round-overview")).toBeVisible();
+    await expect(page.locator(".decision-panel")).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: `test-results/density-portrait-${viewport.width}x${viewport.height}.png`,
+      fullPage: true,
+    });
+  }
 });

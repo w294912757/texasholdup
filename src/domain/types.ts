@@ -143,6 +143,12 @@ export interface PlayerAction {
   targetAmount?: number;
 }
 
+export interface PlayerActionCommand extends PlayerAction {
+  id: string;
+  sessionId: string;
+  actionSeq: number;
+}
+
 export interface LegalAction {
   type: PlayerActionType;
   label: string;

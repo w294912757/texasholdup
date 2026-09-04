@@ -13,6 +13,7 @@ import {
   type GameSettings,
 } from "@/domain/settings";
 import type { AccountProfile, GameSession } from "@/domain/types";
+import type { TrainingSession } from "@/domain/training";
 import {
   PokerDatabase,
   pokerDatabase,
@@ -21,6 +22,7 @@ import {
   type HandHistoryRecord,
   type LedgerEntryType,
   type ProgressionRecord,
+  type ReviewSimulationRecord,
 } from "./database";
 import type { HandState } from "@/domain/types";
 
@@ -316,6 +318,8 @@ export class GameRepository {
         this.db.handRecords,
         this.db.ledger,
         this.db.progression,
+        this.db.reviewSimulations,
+        this.db.trainingSessions,
         this.db.meta,
       ],
       async () => {
@@ -326,6 +330,14 @@ export class GameRepository {
         await this.db.handRecords.where("accountId").equals(accountId).delete();
         await this.db.ledger.where("accountId").equals(accountId).delete();
         await this.db.progression.where("accountId").equals(accountId).delete();
+        await this.db.reviewSimulations
+          .where("accountId")
+          .equals(accountId)
+          .delete();
+        await this.db.trainingSessions
+          .where("accountId")
+          .equals(accountId)
+          .delete();
         await this.db.meta.delete(`settings:${accountId}`);
         await this.db.accounts.delete(accountId);
 
@@ -613,6 +625,105 @@ export class GameRepository {
       await this.db.handRecords.put(updated);
       return cloneSerializable(updated);
     });
+  }
+
+  async saveReviewSimulation(
+    accountId: string,
+    handRecordId: string,
+    decisionSeq: number,
+    result: ReviewSimulationRecord["result"],
+  ): Promise<ReviewSimulationRecord> {
+    const hand = await this.db.handRecords.get(handRecordId);
+    if (!hand || hand.accountId !== accountId)
+      throw new Error("对局记录不存在或不属于当前账号");
+    const record: ReviewSimulationRecord = {
+      id: crypto.randomUUID(),
+      accountId,
+      handRecordId,
+      decisionSeq,
+      createdAt: timestamp(),
+      result: cloneSerializable(result),
+    };
+    await this.db.reviewSimulations.add(record);
+    return cloneSerializable(record);
+  }
+
+  async listReviewSimulations(
+    accountId: string,
+    handRecordId: string,
+  ): Promise<ReviewSimulationRecord[]> {
+    const records = await this.db.reviewSimulations
+      .where("accountId")
+      .equals(accountId)
+      .filter((record) => record.handRecordId === handRecordId)
+      .toArray();
+    return records.map((record) => cloneSerializable(record));
+  }
+
+  async startTrainingSession(
+    session: TrainingSession,
+  ): Promise<TrainingSession> {
+    return this.db.transaction(
+      "rw",
+      this.db.accounts,
+      this.db.trainingSessions,
+      async () => {
+        if (!(await this.db.accounts.get(session.accountId)))
+          throw new Error("账号不存在");
+        const active = await this.db.trainingSessions
+          .where("accountId")
+          .equals(session.accountId)
+          .filter((item) => item.status === "active")
+          .toArray();
+        if (active.length)
+          await this.db.trainingSessions.bulkDelete(
+            active.map((item) => item.id),
+          );
+        const saved = cloneSerializable({ ...session, revision: 1 });
+        await this.db.trainingSessions.add(saved);
+        return cloneSerializable(saved);
+      },
+    );
+  }
+
+  async saveTrainingSession(
+    session: TrainingSession,
+  ): Promise<TrainingSession> {
+    return this.db.transaction("rw", this.db.trainingSessions, async () => {
+      const current = await this.db.trainingSessions.get(session.id);
+      if (!current || current.accountId !== session.accountId)
+        throw new Error("训练记录不存在或不属于当前账号");
+      if (current.revision !== session.revision)
+        throw new Error("训练已在其他页面推进，请重新载入最新进度");
+      const saved = cloneSerializable({
+        ...session,
+        revision: current.revision + 1,
+      });
+      await this.db.trainingSessions.put(saved);
+      return cloneSerializable(saved);
+    });
+  }
+
+  async loadActiveTraining(accountId: string): Promise<TrainingSession | null> {
+    const records = await this.db.trainingSessions
+      .where("accountId")
+      .equals(accountId)
+      .filter((item) => item.status === "active")
+      .toArray();
+    const latest = records.sort((left, right) =>
+      right.updatedAt.localeCompare(left.updatedAt),
+    )[0];
+    return latest ? cloneSerializable(latest) : null;
+  }
+
+  async listTrainingSessions(accountId: string): Promise<TrainingSession[]> {
+    const records = await this.db.trainingSessions
+      .where("accountId")
+      .equals(accountId)
+      .toArray();
+    return records
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map((record) => cloneSerializable(record));
   }
 
   async exportAccount(accountId: string): Promise<string> {

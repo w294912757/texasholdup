@@ -14,7 +14,7 @@ import type {
   AccountProfile,
   GameConfig,
   GameSession,
-  PlayerAction,
+  PlayerActionCommand,
 } from "@/domain/types";
 import { gameRepository } from "@/persistence/repository";
 import { DEFAULT_GAME_SETTINGS, type GameSettings } from "@/domain/settings";
@@ -36,7 +36,10 @@ export const useAppStore = defineStore("app", () => {
   const accounts = ref<AccountProfile[]>([]);
   const session = ref<GameSession | null>(null);
   const saveState = ref<"saved" | "saving" | "error">("saved");
+  const storageLocked = ref(false);
   const settings = ref<GameSettings>({ ...DEFAULT_GAME_SETTINGS });
+  const activeActionCommandId = ref<string | null>(null);
+  const completedActionCommandId = ref<string | null>(null);
 
   const currentPlayer = computed(() =>
     session.value ? getCurrentPlayer(session.value) : null,
@@ -74,6 +77,17 @@ export const useAppStore = defineStore("app", () => {
     } finally {
       busy.value = false;
     }
+  }
+
+  async function reloadLocalState(): Promise<void> {
+    account.value = await gameRepository.getCurrentAccount();
+    settings.value = await gameRepository.loadSettings(account.value.id);
+    configureAudio(settings.value);
+    session.value = await gameRepository.loadActiveSession(account.value.id);
+    await refreshAccounts();
+    saveState.value = "saved";
+    storageLocked.value = false;
+    if (session.value) queueTask(continueAiTurns);
   }
 
   async function createAccount(name: string): Promise<void> {
@@ -149,6 +163,8 @@ export const useAppStore = defineStore("app", () => {
 
   async function startGame(config: GameConfig): Promise<void> {
     if (!account.value) throw new Error("账号尚未初始化");
+    if (storageLocked.value)
+      throw new Error("存储处于只读保护，请重新载入现场");
     if (session.value) throw new Error("存在未结束牌局，请先继续现场");
     busy.value = true;
     try {
@@ -171,29 +187,48 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
-  async function performAction(action: PlayerAction): Promise<void> {
+  async function performAction(command: PlayerActionCommand): Promise<void> {
+    if (storageLocked.value)
+      throw new Error("存储处于只读保护，请重新载入现场");
+    if (
+      command.id === activeActionCommandId.value ||
+      command.id === completedActionCommandId.value
+    )
+      return;
     if (!session.value || !isHumanTurn.value || busy.value) return;
+    if (
+      command.sessionId !== session.value.id ||
+      command.actionSeq !== session.value.currentHand.actionSeq
+    )
+      throw new Error("琛屽姩宸茶繃鏈燂紝璇锋寜褰撳墠鐗岄潰閲嶆柊鎿嶄綔");
+    activeActionCommandId.value = command.id;
     busy.value = true;
     saveState.value = "saving";
     try {
       const player = getCurrentPlayer(session.value);
       if (!player) return;
-      const next = applyPlayerAction(session.value, player.id, action);
+      const next = applyPlayerAction(session.value, player.id, {
+        type: command.type,
+        targetAmount: command.targetAmount,
+      });
       session.value = await gameRepository.commitSession(next);
+      completedActionCommandId.value = command.id;
       playDecisionSound(true);
       saveState.value = "saved";
     } catch (error) {
       saveState.value = "error";
+      storageLocked.value = true;
       setError(error);
       throw error;
     } finally {
+      activeActionCommandId.value = null;
       busy.value = false;
     }
     await continueAiTurns();
   }
 
   async function continueAiTurns(): Promise<void> {
-    if (busy.value) return;
+    if (busy.value || storageLocked.value) return;
     let guard = 0;
     while (
       session.value &&
@@ -213,6 +248,7 @@ export const useAppStore = defineStore("app", () => {
         saveState.value = "saved";
       } catch (error) {
         saveState.value = "error";
+        storageLocked.value = true;
         setError(error);
         return;
       } finally {
@@ -223,6 +259,8 @@ export const useAppStore = defineStore("app", () => {
   }
 
   async function proceedAfterHand(): Promise<"next" | "finished"> {
+    if (storageLocked.value)
+      throw new Error("存储处于只读保护，请重新载入现场");
     if (!session.value || session.value.currentHand.phase !== "complete")
       throw new Error("当前手牌尚未结束");
     busy.value = true;
@@ -242,6 +280,8 @@ export const useAppStore = defineStore("app", () => {
       queueTask(continueAiTurns);
       return "next";
     } catch (error) {
+      storageLocked.value = true;
+      saveState.value = "error";
       setError(error);
       throw error;
     } finally {
@@ -250,6 +290,8 @@ export const useAppStore = defineStore("app", () => {
   }
 
   async function leaveAndRematch(): Promise<void> {
+    if (storageLocked.value)
+      throw new Error("存储处于只读保护，请重新载入现场");
     if (!session.value || !account.value) return;
     busy.value = true;
     try {
@@ -282,6 +324,8 @@ export const useAppStore = defineStore("app", () => {
       await refreshAccounts();
       queueTask(continueAiTurns);
     } catch (error) {
+      storageLocked.value = true;
+      saveState.value = "error";
       setError(error);
       throw error;
     } finally {
@@ -290,6 +334,8 @@ export const useAppStore = defineStore("app", () => {
   }
 
   async function closeCurrentTable(): Promise<void> {
+    if (storageLocked.value)
+      throw new Error("存储处于只读保护，请重新载入现场");
     if (!session.value) return;
     let abandoned = forceHumanLeave(session.value);
     abandoned = await gameRepository.commitSession(abandoned);
@@ -325,12 +371,14 @@ export const useAppStore = defineStore("app", () => {
     accounts,
     session,
     saveState,
+    storageLocked,
     settings,
     currentPlayer,
     humanPlayer,
     isHumanTurn,
     levelProgress,
     initialize,
+    reloadLocalState,
     createAccount,
     switchAccount,
     switchAccountAfterLeave,

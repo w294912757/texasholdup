@@ -16,6 +16,11 @@ const router = createRouter({
       component: () => import("@/views/HistoryView.vue"),
     },
     {
+      path: "/training",
+      name: "training",
+      component: () => import("@/views/TrainingView.vue"),
+    },
+    {
       path: "/statistics",
       name: "statistics",
       component: () => import("@/views/StatisticsView.vue"),
@@ -24,6 +29,16 @@ const router = createRouter({
       path: "/settings",
       name: "settings",
       component: () => import("@/views/SettingsView.vue"),
+    },
+    {
+      path: "/storage",
+      name: "storage",
+      component: () => import("@/views/StorageView.vue"),
+    },
+    {
+      path: "/rules",
+      name: "rules",
+      component: () => import("@/views/RulesView.vue"),
     },
   ],
 });

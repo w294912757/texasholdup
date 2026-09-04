@@ -10,6 +10,8 @@ import {
 import { PokerDatabase } from "@/persistence/database";
 import { GameRepository, StaleGameError } from "@/persistence/repository";
 import type { GameSession, PlayerAction } from "@/domain/types";
+import { createTrainingSession, submitTrainingAnswer } from "@/domain/training";
+import { BUILT_IN_GAME_PRESETS } from "@/domain/settings";
 
 const databases: PokerDatabase[] = [];
 
@@ -226,6 +228,16 @@ describe("transactional game repository", () => {
       aiThinkingTime: 0,
       cardStyle: "high-contrast",
       volume: 72,
+      displayDensity: "portrait",
+      customPresets: [
+        {
+          ...BUILT_IN_GAME_PRESETS[0]!,
+          id: "custom-repository-test",
+          name: "仓库测试",
+          builtIn: false,
+          createdAt: "2026-09-04T00:00:00.000Z",
+        },
+      ],
     });
     const second = await store.createAccount("settings-second");
 
@@ -233,11 +245,15 @@ describe("transactional game repository", () => {
       aiThinkingTime: 0,
       cardStyle: "high-contrast",
       volume: 72,
+      displayDensity: "portrait",
+      customPresets: [{ id: "custom-repository-test", name: "仓库测试" }],
     });
     expect(await store.loadSettings(second.id)).toMatchObject({
       aiThinkingTime: 360,
       cardStyle: "classic",
       volume: 35,
+      displayDensity: "standard",
+      customPresets: [],
     });
 
     const imported = await store.importAccountBackup(
@@ -248,6 +264,8 @@ describe("transactional game repository", () => {
       aiThinkingTime: 0,
       cardStyle: "high-contrast",
       volume: 72,
+      displayDensity: "portrait",
+      customPresets: [{ id: "custom-repository-test", name: "仓库测试" }],
     });
   });
 
@@ -363,5 +381,28 @@ describe("transactional game repository", () => {
       sessionId: completed.id,
       levelBefore: 1,
     });
+  });
+
+  it("persists and isolates active training without changing account progress", async () => {
+    const store = repository();
+    const admin = await store.initialize();
+    const second = await store.createAccount("second");
+    const before = await store.getAccount(admin.id);
+    const started = await store.startTrainingSession(
+      createTrainingSession(admin.id, 10, [], 31),
+    );
+    const question = started.questions[0]!;
+    const option = question.legalActions[0]!;
+    const saved = await store.saveTrainingSession(
+      submitTrainingAnswer(started, option.type, option.minTarget),
+    );
+
+    expect((await store.loadActiveTraining(admin.id))?.answers).toHaveLength(1);
+    expect(await store.loadActiveTraining(second.id)).toBeNull();
+    expect(await store.getAccount(admin.id)).toEqual(before);
+    await expect(store.saveTrainingSession(started)).rejects.toThrow(
+      "其他页面推进",
+    );
+    expect(saved.mode).toBe("training");
   });
 });

@@ -1,21 +1,36 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   ChartColumnIncreasing,
   CircleHelp,
   CircleDollarSign,
+  Copy,
+  FilePlus2,
   List,
+  Pencil,
   Play,
   RotateCcw,
   ShieldCheck,
+  SlidersHorizontal,
   Settings,
+  Trash2,
   Trophy,
   Users,
+  GraduationCap,
 } from "@lucide/vue";
 import { useAppStore } from "@/stores/app";
 import type { GameConfig } from "@/domain/types";
+import {
+  BUILT_IN_GAME_PRESETS,
+  MAX_CUSTOM_GAME_PRESETS,
+  gamePresetValues,
+  type BlindStructure,
+  type CustomGamePreset,
+  type GamePreset,
+  type GamePresetValues,
+} from "@/domain/settings";
 import {
   AI_DIFFICULTY_GROUPS,
   getAiMatchingGuide,
@@ -31,13 +46,24 @@ const downgradeDialogVisible = ref(false);
 const progressionDialogVisible = ref(false);
 const progressionHelpVisible = ref(false);
 const progressionHelpTab = ref("matching");
+const presetDialogVisible = ref(false);
+const presetBusy = ref(false);
+const selectedPresetId = ref("builtin-standard");
 const progressionRecords = ref<ProgressionRecord[]>([]);
 const downgradeTarget = ref(1);
-const form = reactive({
+const form = reactive<{
+  aiCount: number;
+  buyIn: number;
+  blinds: BlindStructure;
+}>({
   aiCount: 5,
   buyIn: 1_000,
   blinds: "10/20",
 });
+const allPresets = computed<GamePreset[]>(() => [
+  ...BUILT_IN_GAME_PRESETS,
+  ...store.settings.customPresets,
+]);
 
 const maximumBuyIn = computed(() =>
   Math.max(500, store.account?.bankroll ?? 500),
@@ -51,6 +77,222 @@ const levelOptions = computed(() =>
 const aiMatchingGuide = computed(() =>
   getAiMatchingGuide(store.account?.level ?? 1),
 );
+
+const presetDescriptions: Record<string, string> = {
+  "builtin-standard": "满桌、标准节奏和完整提示，适合常规对局。",
+  "builtin-quick": "三人桌、短等待和紧凑布局，适合快速练习。",
+  "builtin-deep": "3,000 筹码买入和慢速回放，适合深筹码决策。",
+  "builtin-review": "单挑、小盲注和慢速回放，适合边打边复盘。",
+};
+
+watch(
+  () => store.account?.id,
+  () => {
+    const standard = BUILT_IN_GAME_PRESETS[0]!;
+    Object.assign(form, {
+      aiCount: standard.aiCount,
+      buyIn: Math.min(standard.buyIn, maximumBuyIn.value),
+      blinds: standard.blinds,
+    });
+    selectedPresetId.value = presetMatchesCurrent(standard)
+      ? standard.id
+      : "manual";
+  },
+);
+
+function currentPresetValues(): GamePresetValues {
+  return {
+    aiCount: form.aiCount,
+    buyIn: form.buyIn,
+    blinds: form.blinds,
+    animationSpeed: store.settings.animationSpeed,
+    aiThinkingTime: store.settings.aiThinkingTime,
+    soundEnabled: store.settings.soundEnabled,
+    replaySpeed: store.settings.replaySpeed,
+    beginnerHints: store.settings.beginnerHints,
+    displayDensity: store.settings.displayDensity,
+  };
+}
+
+function presetMatchesCurrent(preset: GamePreset): boolean {
+  const presetValues = gamePresetValues(preset);
+  const currentValues = currentPresetValues();
+  return (Object.keys(presetValues) as (keyof GamePresetValues)[]).every(
+    (key) => presetValues[key] === currentValues[key],
+  );
+}
+
+function markManualConfiguration(): void {
+  selectedPresetId.value = "manual";
+}
+
+function presetSummary(preset: GamePreset): string {
+  const thinking = preset.aiThinkingTime === 0 ? "即时" : "延时";
+  const density = {
+    standard: "标准布局",
+    compact: "紧凑布局",
+    portrait: "竖屏布局",
+  }[preset.displayDensity];
+  return `${preset.aiCount + 1} 人桌 · 买入 ${preset.buyIn.toLocaleString()} · 盲注 ${preset.blinds} · ${thinking} · ${density}`;
+}
+
+function presetDescription(preset: GamePreset): string {
+  return presetDescriptions[preset.id] ?? "保存当前账号的一组牌局和体验设置。";
+}
+
+async function applyPreset(presetId: string): Promise<void> {
+  if (presetId === "manual") return;
+  const preset = allPresets.value.find((item) => item.id === presetId);
+  if (!preset) return;
+  const values = gamePresetValues(preset);
+  const buyIn = Math.min(values.buyIn, maximumBuyIn.value);
+  presetBusy.value = true;
+  try {
+    await store.updateSettings({
+      animationSpeed: values.animationSpeed,
+      aiThinkingTime: values.aiThinkingTime,
+      soundEnabled: values.soundEnabled,
+      replaySpeed: values.replaySpeed,
+      beginnerHints: values.beginnerHints,
+      displayDensity: values.displayDensity,
+    });
+    Object.assign(form, {
+      aiCount: values.aiCount,
+      buyIn,
+      blinds: values.blinds,
+    });
+    selectedPresetId.value = preset.id;
+    if (buyIn !== values.buyIn) {
+      ElMessage.warning(`可用筹码不足，买入已调整为 ${buyIn.toLocaleString()}`);
+    } else {
+      ElMessage.success(`已应用“${preset.name}”预设`);
+    }
+  } catch (error) {
+    selectedPresetId.value = "manual";
+    ElMessage.error(error instanceof Error ? error.message : "预设应用失败");
+  } finally {
+    presetBusy.value = false;
+  }
+}
+
+function presetNameExists(name: string, excludeId?: string): boolean {
+  const nameKey = name.trim().toLocaleLowerCase();
+  return allPresets.value.some(
+    (preset) =>
+      preset.id !== excludeId &&
+      preset.name.trim().toLocaleLowerCase() === nameKey,
+  );
+}
+
+async function requestPresetName(
+  title: string,
+  initialName: string,
+  excludeId?: string,
+): Promise<string | null> {
+  try {
+    const result = await ElMessageBox.prompt(
+      "名称会显示在当前账号的预设列表中。",
+      title,
+      {
+        confirmButtonText: "保存",
+        cancelButtonText: "取消",
+        inputValue: initialName,
+        inputPlaceholder: "输入预设名称",
+      },
+    );
+    const name = result.value.trim();
+    if (!name || name.length > 24) {
+      ElMessage.warning("预设名称需为 1 至 24 个字符");
+      return null;
+    }
+    if (presetNameExists(name, excludeId)) {
+      ElMessage.warning("预设名称已存在");
+      return null;
+    }
+    return name;
+  } catch (error) {
+    if (error !== "cancel")
+      ElMessage.error(error instanceof Error ? error.message : "操作失败");
+    return null;
+  }
+}
+
+async function createCustomPreset(source?: GamePreset): Promise<void> {
+  if (store.settings.customPresets.length >= MAX_CUSTOM_GAME_PRESETS) {
+    ElMessage.warning(`最多保存 ${MAX_CUSTOM_GAME_PRESETS} 个自定义预设`);
+    return;
+  }
+  const name = await requestPresetName(
+    source ? "复制预设" : "新建预设",
+    source ? `${source.name} 副本` : "我的预设",
+  );
+  if (!name) return;
+  const values = source ? gamePresetValues(source) : currentPresetValues();
+  const preset: CustomGamePreset = {
+    id: `custom-${globalThis.crypto.randomUUID()}`,
+    name,
+    builtIn: false,
+    createdAt: new Date().toISOString(),
+    ...values,
+  };
+  presetBusy.value = true;
+  try {
+    await store.updateSettings({
+      customPresets: [...store.settings.customPresets, preset],
+    });
+    selectedPresetId.value = preset.id;
+    ElMessage.success("自定义预设已保存");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "预设保存失败");
+  } finally {
+    presetBusy.value = false;
+  }
+}
+
+async function renameCustomPreset(preset: CustomGamePreset): Promise<void> {
+  const name = await requestPresetName("重命名预设", preset.name, preset.id);
+  if (!name) return;
+  presetBusy.value = true;
+  try {
+    await store.updateSettings({
+      customPresets: store.settings.customPresets.map((item) =>
+        item.id === preset.id ? { ...item, name } : item,
+      ),
+    });
+    ElMessage.success("预设已重命名");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "重命名失败");
+  } finally {
+    presetBusy.value = false;
+  }
+}
+
+async function deleteCustomPreset(preset: CustomGamePreset): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `删除“${preset.name}”不会改变当前牌局或已应用的设置。`,
+      "删除自定义预设",
+      {
+        confirmButtonText: "删除",
+        cancelButtonText: "取消",
+        type: "warning",
+      },
+    );
+    presetBusy.value = true;
+    await store.updateSettings({
+      customPresets: store.settings.customPresets.filter(
+        (item) => item.id !== preset.id,
+      ),
+    });
+    if (selectedPresetId.value === preset.id) selectedPresetId.value = "manual";
+    ElMessage.success("预设已删除");
+  } catch (error) {
+    if (error !== "cancel")
+      ElMessage.error(error instanceof Error ? error.message : "删除失败");
+  } finally {
+    presetBusy.value = false;
+  }
+}
 
 function tierRange(tiers: number[]): string {
   if (!tiers.length) return "当前无可用档位";
@@ -192,6 +434,13 @@ async function openProgression(): Promise<void> {
         </el-button>
         <el-button
           class="profile-overview__command"
+          :icon="GraduationCap"
+          @click="router.push('/training')"
+        >
+          决策训练
+        </el-button>
+        <el-button
+          class="profile-overview__command"
           :icon="List"
           @click="openProgression"
         >
@@ -242,6 +491,58 @@ async function openProgression(): Promise<void> {
         <span class="match-setup__privacy">对手强度已隐藏</span>
       </div>
 
+      <div class="preset-toolbar">
+        <div class="preset-toolbar__copy">
+          <span class="preset-toolbar__label">牌局预设</span>
+          <span class="preset-toolbar__description"
+            >同时应用开桌参数与当前账号的体验设置</span
+          >
+        </div>
+        <el-select
+          v-model="selectedPresetId"
+          class="preset-toolbar__select"
+          :loading="presetBusy"
+          aria-label="选择牌局预设"
+          @change="applyPreset"
+        >
+          <el-option
+            class="preset-toolbar__option"
+            label="当前手动配置"
+            value="manual"
+            disabled
+          />
+          <el-option-group class="preset-toolbar__group" label="内置预设">
+            <el-option
+              v-for="preset in BUILT_IN_GAME_PRESETS"
+              :key="preset.id"
+              class="preset-toolbar__option"
+              :label="preset.name"
+              :value="preset.id"
+            />
+          </el-option-group>
+          <el-option-group
+            v-if="store.settings.customPresets.length"
+            class="preset-toolbar__group"
+            label="自定义预设"
+          >
+            <el-option
+              v-for="preset in store.settings.customPresets"
+              :key="preset.id"
+              class="preset-toolbar__option"
+              :label="preset.name"
+              :value="preset.id"
+            />
+          </el-option-group>
+        </el-select>
+        <el-button
+          class="preset-toolbar__manage"
+          :icon="SlidersHorizontal"
+          @click="presetDialogVisible = true"
+        >
+          管理预设
+        </el-button>
+      </div>
+
       <el-form
         class="match-form"
         label-position="top"
@@ -252,6 +553,7 @@ async function openProgression(): Promise<void> {
             v-model="form.aiCount"
             class="match-form__segmented"
             :options="[1, 2, 3, 4, 5]"
+            @change="markManualConfiguration"
           />
         </el-form-item>
         <el-form-item class="match-form__field" label="入桌买入">
@@ -262,10 +564,15 @@ async function openProgression(): Promise<void> {
             :max="maximumBuyIn"
             :step="100"
             controls-position="right"
+            @change="markManualConfiguration"
           />
         </el-form-item>
         <el-form-item class="match-form__field" label="盲注结构">
-          <el-select v-model="form.blinds" class="match-form__select">
+          <el-select
+            v-model="form.blinds"
+            class="match-form__select"
+            @change="markManualConfiguration"
+          >
             <el-option class="match-form__option" label="5 / 10" value="5/10" />
             <el-option
               class="match-form__option"
@@ -300,6 +607,147 @@ async function openProgression(): Promise<void> {
         </el-button>
       </el-form>
     </section>
+
+    <el-dialog
+      v-model="presetDialogVisible"
+      class="preset-manager-dialog"
+      title="牌局预设管理"
+      width="min(720px, 94vw)"
+    >
+      <div class="preset-manager">
+        <div class="preset-manager__intro">
+          <p class="preset-manager__description">
+            预设仅保存开桌与体验配置，不保存对手实际水平、牌堆或当前牌局现场。
+          </p>
+          <el-button
+            class="preset-manager__create"
+            type="primary"
+            :icon="FilePlus2"
+            :disabled="presetBusy"
+            @click="createCustomPreset()"
+          >
+            保存当前配置
+          </el-button>
+        </div>
+
+        <section
+          class="preset-manager__section"
+          aria-labelledby="built-in-presets-title"
+        >
+          <h3 id="built-in-presets-title" class="preset-manager__title">
+            内置预设
+          </h3>
+          <div class="preset-manager__list">
+            <article
+              v-for="preset in BUILT_IN_GAME_PRESETS"
+              :key="preset.id"
+              class="preset-manager__item"
+            >
+              <div class="preset-manager__item-copy">
+                <strong class="preset-manager__item-name">{{
+                  preset.name
+                }}</strong>
+                <span class="preset-manager__item-summary">{{
+                  presetSummary(preset)
+                }}</span>
+                <span class="preset-manager__item-description">{{
+                  presetDescription(preset)
+                }}</span>
+              </div>
+              <div class="preset-manager__commands">
+                <el-button
+                  class="preset-manager__command preset-manager__command--copy"
+                  :icon="Copy"
+                  title="复制为自定义预设"
+                  aria-label="复制为自定义预设"
+                  :disabled="presetBusy"
+                  @click="createCustomPreset(preset)"
+                />
+                <el-button
+                  class="preset-manager__command preset-manager__command--apply"
+                  type="primary"
+                  :disabled="presetBusy"
+                  @click="applyPreset(preset.id)"
+                >
+                  应用
+                </el-button>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section
+          class="preset-manager__section"
+          aria-labelledby="custom-presets-title"
+        >
+          <div class="preset-manager__section-heading">
+            <h3 id="custom-presets-title" class="preset-manager__title">
+              自定义预设
+            </h3>
+            <span class="preset-manager__count">
+              {{ store.settings.customPresets.length }} /
+              {{ MAX_CUSTOM_GAME_PRESETS }}
+            </span>
+          </div>
+          <div
+            v-if="!store.settings.customPresets.length"
+            class="preset-manager__empty"
+          >
+            暂无自定义预设
+          </div>
+          <div v-else class="preset-manager__list">
+            <article
+              v-for="preset in store.settings.customPresets"
+              :key="preset.id"
+              class="preset-manager__item preset-manager__item--custom"
+            >
+              <div class="preset-manager__item-copy">
+                <strong class="preset-manager__item-name">{{
+                  preset.name
+                }}</strong>
+                <span class="preset-manager__item-summary">{{
+                  presetSummary(preset)
+                }}</span>
+              </div>
+              <div class="preset-manager__commands">
+                <el-button
+                  class="preset-manager__command preset-manager__command--rename"
+                  :icon="Pencil"
+                  title="重命名预设"
+                  aria-label="重命名预设"
+                  :disabled="presetBusy"
+                  @click="renameCustomPreset(preset)"
+                />
+                <el-button
+                  class="preset-manager__command preset-manager__command--copy"
+                  :icon="Copy"
+                  title="复制预设"
+                  aria-label="复制预设"
+                  :disabled="presetBusy"
+                  @click="createCustomPreset(preset)"
+                />
+                <el-button
+                  class="preset-manager__command preset-manager__command--delete"
+                  :icon="Trash2"
+                  title="删除预设"
+                  aria-label="删除预设"
+                  :disabled="presetBusy"
+                  @click="deleteCustomPreset(preset)"
+                />
+                <el-button
+                  class="preset-manager__command preset-manager__command--apply"
+                  type="primary"
+                  :disabled="presetBusy"
+                  @click="applyPreset(preset.id)"
+                >
+                  应用
+                </el-button>
+              </div>
+            </article>
+          </div>
+        </section>
+      </div>
+    </el-dialog>
 
     <el-dialog
       v-model="downgradeDialogVisible"

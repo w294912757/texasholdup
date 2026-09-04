@@ -58,6 +58,17 @@ function updateVolume(value: number): void {
 function updateCardStyle(value: GameSettings["cardStyle"]): void {
   void saveSettings("cardStyle", value);
 }
+
+function updateDisplayDensity(value: GameSettings["displayDensity"]): void {
+  void saveSettings("displayDensity", value);
+}
+
+function updateSafetyBoolean(
+  key: "confirmAllIn" | "confirmLargeBet" | "confirmLeaveTable",
+  value: boolean,
+): void {
+  void saveSettings(key, value);
+}
 </script>
 
 <template>
@@ -148,6 +159,77 @@ function updateCardStyle(value: GameSettings["cardStyle"]): void {
               { label: '高对比', value: 'high-contrast' },
             ]"
             @change="updateCardStyle"
+          />
+        </div>
+        <div class="settings-row">
+          <div class="settings-row__copy">
+            <strong class="settings-row__label">显示密度</strong>
+            <span class="settings-row__description"
+              >标准保留完整信息，紧凑减少留白，竖屏将牌局改为纵向阅读。</span
+            >
+          </div>
+          <el-segmented
+            v-model="form.displayDensity"
+            class="settings-row__control settings-row__density"
+            :options="[
+              { label: '标准', value: 'standard' },
+              { label: '紧凑', value: 'compact' },
+              { label: '竖屏', value: 'portrait' },
+            ]"
+            @change="updateDisplayDensity"
+          />
+        </div>
+      </div>
+    </section>
+
+    <section class="settings-section" aria-labelledby="settings-safety-title">
+      <header class="settings-section__header">
+        <h2 id="settings-safety-title" class="settings-section__title">
+          操作保护
+        </h2>
+        <span class="settings-section__description">高风险操作二次确认</span>
+      </header>
+      <div class="settings-list">
+        <div class="settings-row">
+          <div class="settings-row__copy">
+            <strong class="settings-row__label">全下确认</strong>
+            <span class="settings-row__description"
+              >提交全下前显示筹码影响</span
+            >
+          </div>
+          <el-switch
+            v-model="form.confirmAllIn"
+            class="settings-row__control"
+            aria-label="全下确认"
+            @change="updateSafetyBoolean('confirmAllIn', Boolean($event))"
+          />
+        </div>
+        <div class="settings-row">
+          <div class="settings-row__copy">
+            <strong class="settings-row__label">大额下注确认</strong>
+            <span class="settings-row__description"
+              >新增投入达到可用筹码一半时确认</span
+            >
+          </div>
+          <el-switch
+            v-model="form.confirmLargeBet"
+            class="settings-row__control"
+            aria-label="大额下注确认"
+            @change="updateSafetyBoolean('confirmLargeBet', Boolean($event))"
+          />
+        </div>
+        <div class="settings-row">
+          <div class="settings-row__copy">
+            <strong class="settings-row__label">离桌确认</strong>
+            <span class="settings-row__description"
+              >离桌重匹配前确认放弃本手投入</span
+            >
+          </div>
+          <el-switch
+            v-model="form.confirmLeaveTable"
+            class="settings-row__control"
+            aria-label="离桌确认"
+            @change="updateSafetyBoolean('confirmLeaveTable', Boolean($event))"
           />
         </div>
       </div>

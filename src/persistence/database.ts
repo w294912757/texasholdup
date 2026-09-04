@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { AccountProfile, GameSession, HandState } from "@/domain/types";
+import type { TrainingSession } from "@/domain/training";
 
 export interface AccountRecord extends AccountProfile {
   nameKey: string;
@@ -24,6 +25,15 @@ export interface HandHistoryRecord {
   favorite: boolean;
   note: string;
   hand: HandState;
+}
+
+export interface ReviewSimulationRecord {
+  id: string;
+  accountId: string;
+  handRecordId: string;
+  decisionSeq: number;
+  createdAt: string;
+  result: import("@/domain/review").AlternativeActionResult[];
 }
 
 export type LedgerEntryType =
@@ -57,12 +67,28 @@ export interface MetaRecord {
   value: string;
 }
 
+export interface BackupSnapshotRecord {
+  id: string;
+  reason: "manual" | "before-export" | "before-import" | "before-cleanup";
+  schemaVersion: number;
+  createdAt: string;
+  accountCount: number;
+  handCount: number;
+  activeGameCount: number;
+  checksum: string;
+  serializedSize: number;
+  payload: string;
+}
+
 export class PokerDatabase extends Dexie {
   accounts!: EntityTable<AccountRecord, "id">;
   activeGames!: EntityTable<ActiveGameRecord, "accountId">;
   handRecords!: EntityTable<HandHistoryRecord, "id">;
   ledger!: EntityTable<LedgerRecord, "id">;
   progression!: EntityTable<ProgressionRecord, "id">;
+  reviewSimulations!: EntityTable<ReviewSimulationRecord, "id">;
+  trainingSessions!: EntityTable<TrainingSession, "id">;
+  backupSnapshots!: EntityTable<BackupSnapshotRecord, "id">;
   meta!: EntityTable<MetaRecord, "key">;
 
   constructor(name = "holdup-poker") {
@@ -114,6 +140,39 @@ export class PokerDatabase extends Dexie {
           record.note = record.note ?? "";
         });
       });
+    this.version(4).stores({
+      accounts: "id,&nameKey,updatedAt",
+      activeGames: "accountId,sessionId,updatedAt",
+      handRecords: "id,[accountId+createdAt],accountId,sessionId,handNumber",
+      ledger: "id,[accountId+createdAt],accountId,sessionId,type",
+      progression: "id,[accountId+createdAt],accountId,sessionId,type",
+      reviewSimulations:
+        "id,[accountId+createdAt],accountId,handRecordId,decisionSeq",
+      meta: "key",
+    });
+    this.version(5).stores({
+      accounts: "id,&nameKey,updatedAt",
+      activeGames: "accountId,sessionId,updatedAt",
+      handRecords: "id,[accountId+createdAt],accountId,sessionId,handNumber",
+      ledger: "id,[accountId+createdAt],accountId,sessionId,type",
+      progression: "id,[accountId+createdAt],accountId,sessionId,type",
+      reviewSimulations:
+        "id,[accountId+createdAt],accountId,handRecordId,decisionSeq",
+      trainingSessions: "id,[accountId+updatedAt],accountId,status",
+      meta: "key",
+    });
+    this.version(6).stores({
+      accounts: "id,&nameKey,updatedAt",
+      activeGames: "accountId,sessionId,updatedAt",
+      handRecords: "id,[accountId+createdAt],accountId,sessionId,handNumber",
+      ledger: "id,[accountId+createdAt],accountId,sessionId,type",
+      progression: "id,[accountId+createdAt],accountId,sessionId,type",
+      reviewSimulations:
+        "id,[accountId+createdAt],accountId,handRecordId,decisionSeq",
+      trainingSessions: "id,[accountId+updatedAt],accountId,status",
+      backupSnapshots: "id,createdAt,reason",
+      meta: "key",
+    });
   }
 }
 

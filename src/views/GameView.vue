@@ -1,24 +1,37 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+/* global window, document, crypto, PointerEvent, EventTarget, HTMLElement, KeyboardEvent */
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   ArrowRight,
+  BookOpen,
   ChartNoAxesCombined,
   DoorOpen,
   Save,
   Volume2,
 } from "@lucide/vue";
 import PlayingCard from "@/components/PlayingCard.vue";
+import RuleHelpDialog from "@/components/RuleHelpDialog.vue";
+import type { RuleTopicId } from "@/domain/rules";
 import { getLegalActions, getPlayerHandType, handPot } from "@/domain/engine";
 import { calculateGtoReference } from "@/domain/gto";
-import type { LegalAction, PlayerAction, PlayerState } from "@/domain/types";
+import type {
+  LegalAction,
+  PlayerActionCommand,
+  PlayerState,
+} from "@/domain/types";
 import { useAppStore } from "@/stores/app";
 
 const store = useAppStore();
 const router = useRouter();
 const betTarget = ref(0);
 const gtoDialogOpen = ref(false);
+const ruleHelpOpen = ref(false);
+const ruleHelpTopic = ref<RuleTopicId>("actions");
+const longPressAction = ref<string | null>(null);
+const longPressTimer = ref<number | null>(null);
+const suppressTouchClick = ref(false);
 
 const hand = computed(() => store.session?.currentHand ?? null);
 const sortedPlayers = computed(() =>
@@ -89,6 +102,12 @@ watch(
 
 onMounted(() => {
   if (!store.session) void router.replace("/");
+  window.addEventListener("keydown", handleKeydown);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleKeydown);
+  cancelLongPress();
 });
 
 function playerCardsVisible(player: PlayerState): boolean {
@@ -118,15 +137,156 @@ function actionLabel(action: LegalAction): string {
   return action.label;
 }
 
-async function submitAction(action: LegalAction): Promise<void> {
-  const payload: PlayerAction =
+function openRuleHelp(topicId: RuleTopicId): void {
+  gtoDialogOpen.value = false;
+  ruleHelpTopic.value = topicId;
+  ruleHelpOpen.value = true;
+}
+
+function requiresActionConfirmation(action: LegalAction): boolean {
+  if (!store.currentPlayer) return false;
+  if (action.type === "all-in") return store.settings.confirmAllIn;
+  if (action.type !== "bet" && action.type !== "raise") return false;
+  const additional = Math.max(
+    0,
+    betTarget.value - store.currentPlayer.committedRound,
+  );
+  return (
+    store.settings.confirmLargeBet &&
+    additional >= store.currentPlayer.stack * 0.5 &&
+    additional < store.currentPlayer.stack
+  );
+}
+
+async function submitAction(
+  action: LegalAction,
+  fromLongPress = false,
+): Promise<void> {
+  const payload: PlayerActionCommand =
     action.type === "bet" || action.type === "raise"
-      ? { type: action.type, targetAmount: betTarget.value }
-      : { type: action.type };
+      ? {
+          type: action.type,
+          targetAmount: betTarget.value,
+          id: crypto.randomUUID(),
+          sessionId: store.session?.id ?? "",
+          actionSeq: store.session?.currentHand.actionSeq ?? -1,
+        }
+      : {
+          type: action.type,
+          id: crypto.randomUUID(),
+          sessionId: store.session?.id ?? "",
+          actionSeq: store.session?.currentHand.actionSeq ?? -1,
+        };
+  if (suppressTouchClick.value && !fromLongPress) {
+    suppressTouchClick.value = false;
+    return;
+  }
+  const additional = store.currentPlayer
+    ? Math.max(
+        0,
+        (payload.targetAmount ??
+          store.currentPlayer.committedRound + store.currentPlayer.stack) -
+          store.currentPlayer.committedRound,
+      )
+    : 0;
+  const requiresConfirm = requiresActionConfirmation(action);
   try {
+    if (requiresConfirm) {
+      await ElMessageBox.confirm(
+        `确认${action.type === "all-in" ? "全下" : "大额下注"}？本次追加 ${additional.toLocaleString()}，操作后剩余 ${Math.max(0, (store.currentPlayer?.stack ?? 0) - additional).toLocaleString()}，预计底池 ${(pot.value + additional).toLocaleString()}。`,
+        "确认操作",
+        {
+          confirmButtonText: "确认提交",
+          cancelButtonText: "取消",
+          type: "warning",
+        },
+      );
+    }
     await store.performAction(payload);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "行动提交失败");
+  }
+}
+
+function cancelLongPress(): void {
+  if (longPressTimer.value !== null) window.clearTimeout(longPressTimer.value);
+  longPressTimer.value = null;
+  longPressAction.value = null;
+}
+
+function handlePointerDown(action: LegalAction, event: PointerEvent): void {
+  if (event.pointerType !== "touch") return;
+  if (!requiresActionConfirmation(action)) return;
+  longPressAction.value = action.type;
+  longPressTimer.value = window.setTimeout(() => {
+    suppressTouchClick.value = true;
+    void submitAction(action, true);
+    cancelLongPress();
+  }, 550);
+}
+
+function handlePointerUp(action: LegalAction, event: PointerEvent): void {
+  if (event.pointerType !== "touch") return;
+  if (longPressAction.value === action.type) {
+    suppressTouchClick.value = true;
+    ElMessage.info("请长按确认高风险操作");
+  }
+  cancelLongPress();
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  return Boolean(
+    element?.matches("input, textarea, select, [contenteditable='true']") ||
+    element?.closest(".el-dialog, .el-drawer, .el-popper"),
+  );
+}
+
+function interactionLayerOpen(): boolean {
+  return Boolean(
+    document.querySelector(
+      ".el-overlay, .el-drawer, .el-popper:not([aria-hidden='true'])",
+    ),
+  );
+}
+
+function handleKeydown(event: KeyboardEvent): void {
+  if (
+    event.repeat ||
+    isTypingTarget(event.target) ||
+    interactionLayerOpen() ||
+    store.busy ||
+    store.storageLocked
+  )
+    return;
+  const key = event.key.toLowerCase();
+  if (key === "escape") {
+    gtoDialogOpen.value = false;
+    ruleHelpOpen.value = false;
+    return;
+  }
+  if (key === "g") {
+    gtoDialogOpen.value = true;
+    return;
+  }
+  if (key === " " && hand.value?.phase === "complete") {
+    event.preventDefault();
+    void proceed();
+    return;
+  }
+  if (!store.isHumanTurn) return;
+  const mapped: Record<string, LegalAction["type"]> = {
+    f: "fold",
+    c: legalActions.value.some((item) => item.type === "check")
+      ? "check"
+      : "call",
+    b: "bet",
+    a: "all-in",
+  };
+  const action = legalActions.value.find((item) => item.type === mapped[key]);
+  if (action) {
+    event.preventDefault();
+    void submitAction(action);
   }
 }
 
@@ -134,15 +294,16 @@ async function leaveAndRematch(): Promise<void> {
   if (!store.session || !store.humanPlayer) return;
   const loss = store.humanPlayer.committedHand;
   try {
-    await ElMessageBox.confirm(
-      `离桌后将放弃本手已投入的 ${loss} 筹码，未投入的 ${store.humanPlayer.stack} 筹码会退回账号。`,
-      "离桌并重新匹配",
-      {
-        confirmButtonText: "确认离桌",
-        cancelButtonText: "继续游戏",
-        type: "warning",
-      },
-    );
+    if (store.settings.confirmLeaveTable)
+      await ElMessageBox.confirm(
+        `离桌后将放弃本手已投入的 ${loss} 筹码，未投入的 ${store.humanPlayer.stack} 筹码会退回账号。`,
+        "离桌并重新匹配",
+        {
+          confirmButtonText: "确认离桌",
+          cancelButtonText: "继续游戏",
+          type: "warning",
+        },
+      );
     await store.leaveAndRematch();
     ElMessage.success("已离桌并完成重新匹配");
   } catch (error) {
@@ -219,7 +380,7 @@ async function proceed(): Promise<void> {
         <el-button
           class="game-toolbar__leave"
           :icon="DoorOpen"
-          :disabled="store.busy"
+          :disabled="store.busy || store.storageLocked"
           @click="leaveAndRematch"
         >
           离桌重匹配
@@ -347,6 +508,7 @@ async function proceed(): Promise<void> {
           type="primary"
           :icon="ArrowRight"
           :loading="store.busy"
+          :disabled="store.storageLocked"
           @click="proceed"
         >
           {{ isFinalHand ? "结算本场" : "下一手" }}
@@ -378,6 +540,14 @@ async function proceed(): Promise<void> {
         </div>
         <div class="decision-panel__buttons">
           <el-button
+            class="decision-panel__rule-help"
+            :icon="BookOpen"
+            title="查看行动规则"
+            @click="openRuleHelp('actions')"
+          >
+            规则
+          </el-button>
+          <el-button
             v-for="action in legalActions"
             :key="action.type"
             class="decision-panel__button"
@@ -389,7 +559,10 @@ async function proceed(): Promise<void> {
                   ? 'danger'
                   : 'success'
             "
-            :disabled="store.busy"
+            :disabled="store.busy || store.storageLocked"
+            @pointerdown="handlePointerDown(action, $event)"
+            @pointerup="handlePointerUp(action, $event)"
+            @pointercancel="cancelLongPress"
             @click="submitAction(action)"
           >
             {{ actionLabel(action) }}
@@ -429,13 +602,25 @@ async function proceed(): Promise<void> {
             }}</strong>
           </div>
           <div class="gto-reference__metric">
-            <span class="gto-reference__metric-label">底池赔率</span>
+            <button
+              class="gto-reference__metric-help"
+              type="button"
+              @click="openRuleHelp('pot-odds')"
+            >
+              底池赔率
+            </button>
             <strong class="gto-reference__metric-value">{{
               formatPercent(gtoReference.potOdds)
             }}</strong>
           </div>
           <div class="gto-reference__metric">
-            <span class="gto-reference__metric-label">SPR</span>
+            <button
+              class="gto-reference__metric-help"
+              type="button"
+              @click="openRuleHelp('effective-stack')"
+            >
+              SPR
+            </button>
             <strong class="gto-reference__metric-value">{{
               gtoReference.stackToPot?.toFixed(1) ?? "--"
             }}</strong>
@@ -475,6 +660,7 @@ async function proceed(): Promise<void> {
         </p>
       </div>
     </el-dialog>
+    <RuleHelpDialog v-model="ruleHelpOpen" :topic-id="ruleHelpTopic" />
   </div>
 
   <div v-else class="game-empty">
