@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, useTemplateRef } from "vue";
+/* global Event, navigator, window */
+import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
@@ -26,6 +27,13 @@ const accountDialogVisible = ref(false);
 const accountActionBusy = ref(false);
 const newAccountName = ref("");
 const backupInput = useTemplateRef<{ click: () => void }>("backupInput");
+const pwaUpdateAvailable = ref(false);
+const installPrompt = ref<InstallPromptEvent | null>(null);
+
+interface InstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
 
 const saveLabel = computed(() => {
   if (store.saveState === "saving") return "正在保存";
@@ -33,7 +41,38 @@ const saveLabel = computed(() => {
   return "现场已保存";
 });
 
-onMounted(() => void store.initialize());
+function handlePwaUpdate(): void {
+  pwaUpdateAvailable.value = true;
+}
+
+function handleBeforeInstallPrompt(event: Event): void {
+  event.preventDefault();
+  installPrompt.value = event as InstallPromptEvent;
+}
+
+async function installApplication(): Promise<void> {
+  if (!installPrompt.value) return;
+  await installPrompt.value.prompt();
+  await installPrompt.value.userChoice;
+  installPrompt.value = null;
+}
+
+function applyPwaUpdate(): void {
+  navigator.serviceWorker.controller?.postMessage({ type: "SKIP_WAITING" });
+  pwaUpdateAvailable.value = false;
+  window.setTimeout(() => window.location.reload(), 150);
+}
+
+onMounted(() => {
+  void store.initialize();
+  window.addEventListener("holdup-pwa-update", handlePwaUpdate);
+  window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("holdup-pwa-update", handlePwaUpdate);
+  window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+});
 
 function openAccountDialog(): void {
   accountDialogVisible.value = true;
@@ -173,6 +212,9 @@ async function importAccount(event: unknown): Promise<void> {
         `application-shell--density-${store.settings.displayDensity}`,
       ]"
     >
+      <a class="accessibility-skip-link" href="#application-main-content">
+        跳转到主要内容
+      </a>
       <header class="application-header">
         <button
           class="application-brand"
@@ -292,6 +334,17 @@ async function importAccount(event: unknown): Promise<void> {
         </nav>
 
         <div class="application-status">
+          <el-button
+            v-if="installPrompt"
+            class="application-status__install"
+            type="primary"
+            text
+            :icon="Download"
+            title="安装 HoldUp"
+            @click="installApplication"
+          >
+            安装
+          </el-button>
           <span
             v-if="store.session"
             class="application-status__save"
@@ -333,13 +386,37 @@ async function importAccount(event: unknown): Promise<void> {
         </div>
       </header>
 
-      <main class="application-content">
+      <main
+        id="application-main-content"
+        class="application-content"
+        tabindex="-1"
+      >
         <div v-if="!store.initialized" class="application-loading">
           <span class="application-loading__spinner" aria-hidden="true"></span>
           <span class="application-loading__label">正在恢复本地现场</span>
         </div>
         <router-view v-else class="application-view" />
       </main>
+
+      <el-alert
+        v-if="pwaUpdateAvailable"
+        class="application-update"
+        title="HoldUp 有可用更新"
+        type="info"
+        show-icon
+        :closable="false"
+      >
+        <template #default>
+          <el-button
+            class="application-update__action"
+            type="primary"
+            size="small"
+            @click="applyPwaUpdate"
+          >
+            立即更新
+          </el-button>
+        </template>
+      </el-alert>
 
       <el-alert
         v-if="store.errorMessage"

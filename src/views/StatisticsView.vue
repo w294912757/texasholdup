@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { ChartColumnIncreasing, RotateCcw } from "@lucide/vue";
+import { ChartColumnIncreasing, Download, RotateCcw } from "@lucide/vue";
 import { useAppStore } from "@/stores/app";
 import { gameRepository } from "@/persistence/repository";
 import type { HandHistoryRecord } from "@/persistence/database";
@@ -14,6 +14,7 @@ import {
   type StatisticsFilters,
   type TablePosition,
 } from "@/domain/statistics";
+import { statisticsToCsv } from "@/domain/export";
 
 const store = useAppStore();
 const records = ref<HandHistoryRecord[]>([]);
@@ -100,6 +101,20 @@ function resetFilters(): void {
   filters.tableResult = "all";
   filters.favoriteOnly = false;
 }
+
+function exportFilteredStatistics(): void {
+  if (!store.account) return;
+  const content = `\uFEFF${statisticsToCsv(filteredHands.value)}`;
+  const blob = new globalThis.Blob([content], {
+    type: "text/csv;charset=utf-8",
+  });
+  const url = globalThis.URL.createObjectURL(blob);
+  const anchor = globalThis.document.createElement("a");
+  anchor.href = url;
+  anchor.download = `holdup-${store.account.name}-statistics-${Date.now()}.csv`;
+  anchor.click();
+  globalThis.URL.revokeObjectURL(url);
+}
 </script>
 
 <template>
@@ -119,6 +134,14 @@ function resetFilters(): void {
       <span class="statistics-header__sample">
         当前样本 {{ filteredHands.length }} / {{ analyzedHands.length }} 手
       </span>
+      <el-button
+        class="statistics-header__export"
+        :icon="Download"
+        :disabled="!filteredHands.length"
+        @click="exportFilteredStatistics"
+      >
+        导出 CSV
+      </el-button>
     </header>
 
     <section class="statistics-filters" aria-label="统计筛选">

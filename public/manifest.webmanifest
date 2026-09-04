@@ -1,0 +1,19 @@
+{
+  "name": "HoldUp 单机德州扑克",
+  "short_name": "HoldUp",
+  "description": "本地运行的单机德州扑克训练与复盘工具",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0e1110",
+  "theme_color": "#111513",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

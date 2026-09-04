@@ -40,6 +40,11 @@ const router = createRouter({
       name: "rules",
       component: () => import("@/views/RulesView.vue"),
     },
+    {
+      path: "/diagnostics",
+      name: "diagnostics",
+      component: () => import("@/views/DiagnosticsView.vue"),
+    },
   ],
 });
 

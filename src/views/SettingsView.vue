@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref, watch } from "vue";
+import { Activity } from "@lucide/vue";
+import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { useAppStore } from "@/stores/app";
 import type { GameSettings } from "@/domain/settings";
 
 const store = useAppStore();
+const router = useRouter();
 const saving = ref(false);
 const form = reactive<GameSettings>({ ...store.settings });
 
@@ -304,6 +307,29 @@ function updateSafetyBoolean(
           />
         </div>
       </div>
+    </section>
+
+    <section
+      class="settings-section settings-diagnostics"
+      aria-labelledby="settings-diagnostics-title"
+    >
+      <header class="settings-section__header">
+        <div class="settings-diagnostics__heading">
+          <h2 id="settings-diagnostics-title" class="settings-section__title">
+            开发工具
+          </h2>
+          <span class="settings-section__description"
+            >仅展示本地聚合数据，不影响正式对局</span
+          >
+        </div>
+        <el-button
+          class="settings-diagnostics__button"
+          :icon="Activity"
+          @click="router.push('/diagnostics')"
+        >
+          开发诊断
+        </el-button>
+      </header>
     </section>
 
     <p class="settings-page__notice">

@@ -163,6 +163,165 @@ test("restores the exact saved scene and remains playable", async ({
   });
 });
 
+test("supports table shortcuts without triggering them from inputs or dialogs", async ({
+  page,
+}) => {
+  await startGame(page);
+
+  await page.keyboard.press("g");
+  await expect(page.locator(".gto-dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".gto-dialog")).toBeHidden();
+
+  const beforeInput = await readSavedScene(page);
+  const betInput = page.locator(".bet-control__number input");
+  if (await betInput.isVisible()) {
+    await betInput.focus();
+    await page.keyboard.press("c");
+    await page.waitForTimeout(150);
+    expect(await readSavedScene(page)).toEqual(beforeInput);
+  }
+
+  await page.locator(".game-toolbar__hand").click();
+  await page.keyboard.press("c");
+  await expect
+    .poll(async () => (await readSavedScene(page)).actionSeq, {
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(beforeInput.actionSeq);
+});
+
+test("registers the local PWA shell and restores the app while offline", async ({
+  page,
+  context,
+}) => {
+  await page.goto("/");
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
+    "href",
+    "/manifest.webmanifest",
+  );
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          if (!("serviceWorker" in navigator)) return false;
+          const registration = await navigator.serviceWorker.ready;
+          return Boolean(registration.active);
+        }),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  await page.reload();
+  await expect(page.locator(".application-brand__name")).toHaveText("HoldUp");
+  await context.setOffline(true);
+  await page.reload();
+  await expect(page.locator(".application-brand__name")).toHaveText("HoldUp");
+  await context.setOffline(false);
+});
+
+test("exports public hand records and filtered statistics", async ({
+  page,
+}) => {
+  await startGame(page);
+  for (let turn = 0; turn < 80; turn += 1) {
+    if (await page.locator(".decision-panel__result").isVisible()) break;
+    const action = page
+      .locator(
+        ".decision-panel__actions .decision-panel__button:not([disabled])",
+      )
+      .first();
+    if (await action.isVisible()) await action.click();
+    else await page.waitForTimeout(150);
+  }
+  await expect(page.locator(".decision-panel__result")).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.locator(".decision-panel__next").click();
+  await expect(page.locator(".game-toolbar__hand")).toContainText("2 / 20", {
+    timeout: 15_000,
+  });
+
+  await page.getByTitle("对局记录").click();
+  await page.locator(".history-table .el-table__row").first().click();
+  await expect(page.locator(".history-export")).toBeVisible();
+  await expect(page.locator(".history-export__description")).toContainText(
+    "AI",
+  );
+  const markdownDownload = page.waitForEvent("download");
+  await page
+    .locator(".history-export__button")
+    .filter({ hasText: "Markdown" })
+    .click();
+  expect((await markdownDownload).suggestedFilename()).toMatch(/\.md$/);
+  const textDownload = page.waitForEvent("download");
+  await page
+    .locator(".history-export__button")
+    .filter({ hasText: "行动文本" })
+    .click();
+  expect((await textDownload).suggestedFilename()).toMatch(/\.txt$/);
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".history-detail")).toBeHidden();
+  await expect(page.locator(".el-message")).toHaveCount(0, { timeout: 5_000 });
+  await page.getByTitle("牌局统计").click();
+  await expect(page.locator(".statistics-header__export")).toBeEnabled();
+  const csvDownload = page.waitForEvent("download");
+  await page.locator(".statistics-header__export").click();
+  expect((await csvDownload).suggestedFilename()).toMatch(/\.csv$/);
+  await page.setViewportSize({ width: 360, height: 640 });
+  await expect(page.locator(".statistics-header__export")).toBeInViewport();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test("opens read-only AI fairness diagnostics from settings", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .locator('.application-navigation__button[title="游戏设置"]')
+    .click();
+  await expect(page).toHaveURL(/#\/settings/);
+  await page.locator(".settings-diagnostics__button").click();
+  await expect(page).toHaveURL(/#\/diagnostics/);
+  await expect(page.locator(".diagnostics-page")).toBeVisible();
+  await expect(page.locator(".diagnostics-summary")).toContainText("1 - 12");
+  await expect(page.locator(".diagnostics-distribution__row")).toHaveCount(12);
+  await expect(page.locator(".diagnostics-page")).not.toContainText(
+    /ai-\d|难度.*当前牌桌/,
+  );
+  await page.setViewportSize({ width: 360, height: 640 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test("supports accessible focus order and semantic table status", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".accessibility-skip-link")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#application-main-content")).toBeFocused();
+
+  await startGame(page);
+  await expect(page.locator(".player-row[aria-label]")).toHaveCount(6);
+  await expect(
+    page.locator(".decision-panel__button[aria-keyshortcuts]").first(),
+  ).toHaveAttribute("aria-label", /快捷键/);
+  await expect(
+    page
+      .locator(".decision-panel__waiting-label, .decision-panel__actions")
+      .first(),
+  ).toBeVisible();
+});
+
 test("supports compact and narrow gameplay without horizontal overflow", async ({
   page,
 }) => {

@@ -12,3 +12,22 @@ app.use(createPinia());
 app.use(router);
 app.use(ElementPlus);
 app.mount("#app");
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register("/sw.js").then((registration) => {
+      registration.addEventListener("updatefound", () => {
+        const worker = registration.installing;
+        if (!worker) return;
+        worker.addEventListener("statechange", () => {
+          if (
+            worker.state === "installed" &&
+            navigator.serviceWorker.controller
+          ) {
+            window.dispatchEvent(new CustomEvent("holdup-pwa-update"));
+          }
+        });
+      });
+    });
+  });
+}

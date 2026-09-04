@@ -4,6 +4,8 @@ import {
   CircleHelp,
   ChevronLeft,
   ChevronRight,
+  Download,
+  FileText,
   History,
   Pause,
   Play,
@@ -27,6 +29,7 @@ import { REPLAY_SPEED_MILLISECONDS } from "@/domain/settings";
 import PlayingCard from "@/components/PlayingCard.vue";
 import RuleHelpDialog from "@/components/RuleHelpDialog.vue";
 import type { RuleTopicId } from "@/domain/rules";
+import { handToActionText, handToMarkdown } from "@/domain/export";
 
 const store = useAppStore();
 const records = ref<HandHistoryRecord[]>([]);
@@ -189,6 +192,38 @@ function moveReplay(offset: number): void {
   replayIndex.value = Math.min(
     Math.max(0, replayIndex.value + offset),
     Math.max(0, replayFrames.value.length - 1),
+  );
+}
+
+function downloadText(filename: string, content: string, type: string): void {
+  const blob = new globalThis.Blob([content], { type });
+  const url = globalThis.URL.createObjectURL(blob);
+  const anchor = globalThis.document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  globalThis.URL.revokeObjectURL(url);
+}
+
+function exportSelectedRecord(format: "markdown" | "text"): void {
+  if (!selectedRecord.value) return;
+  const record = selectedRecord.value;
+  const baseName = `holdup-${record.sessionId}-hand-${record.handNumber}`;
+  if (format === "markdown") {
+    downloadText(
+      `${baseName}.md`,
+      handToMarkdown(record),
+      "text/markdown;charset=utf-8",
+    );
+  } else {
+    downloadText(
+      `${baseName}.txt`,
+      handToActionText(record),
+      "text/plain;charset=utf-8",
+    );
+  }
+  ElMessage.success(
+    format === "markdown" ? "Markdown 已导出" : "行动记录已导出",
   );
 }
 
@@ -382,6 +417,35 @@ onBeforeUnmount(stopReplay);
         >
           保存备注
         </el-button>
+      </section>
+
+      <section
+        v-if="selectedRecord"
+        class="history-export"
+        aria-label="导出公开手牌数据"
+      >
+        <div class="history-export__copy">
+          <strong class="history-export__title">导出公开数据</strong>
+          <span class="history-export__description"
+            >不会包含 AI 未公开的底牌</span
+          >
+        </div>
+        <div class="history-export__commands">
+          <el-button
+            class="history-export__button"
+            :icon="Download"
+            @click="exportSelectedRecord('markdown')"
+          >
+            Markdown
+          </el-button>
+          <el-button
+            class="history-export__button"
+            :icon="FileText"
+            @click="exportSelectedRecord('text')"
+          >
+            行动文本
+          </el-button>
+        </div>
       </section>
 
       <section

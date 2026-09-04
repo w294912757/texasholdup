@@ -20,6 +20,7 @@ const isRed = computed(() => suitCode.value === "d" || suitCode.value === "h");
 <template>
   <span
     class="playing-card"
+    role="img"
     :class="{
       'playing-card--hidden': hidden,
       'playing-card--red': isRed,

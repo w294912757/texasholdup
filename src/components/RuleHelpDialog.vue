@@ -41,6 +41,7 @@ async function openRuleCenter(): Promise<void> {
   <el-dialog
     v-model="visible"
     class="rule-help-dialog"
+    aria-label="规则帮助"
     append-to-body
     destroy-on-close
   >

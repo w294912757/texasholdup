@@ -133,6 +133,40 @@ function playerHandTypeVisible(player: PlayerState): boolean {
   );
 }
 
+function playerSemanticState(player: PlayerState): string {
+  if (player.folded) return "已弃牌";
+  if (
+    hand.value?.phase === "complete" &&
+    hand.value.winnerIds.includes(player.id)
+  )
+    return "获胜";
+  if (player.seat === hand.value?.currentSeat) return "行动中";
+  return "等待行动";
+}
+
+function playerAriaLabel(player: PlayerState): string {
+  const handType = playerHandTypeVisible(player)
+    ? playerHandType(player)
+    : null;
+  return [
+    player.name,
+    `座位 ${player.seat + 1}`,
+    `筹码 ${player.stack.toLocaleString()}`,
+    playerSemanticState(player),
+    handType,
+  ]
+    .filter(Boolean)
+    .join("，");
+}
+
+function actionShortcut(action: LegalAction): string | undefined {
+  if (action.type === "fold") return "F";
+  if (action.type === "check" || action.type === "call") return "C";
+  if (action.type === "bet" || action.type === "raise") return "B";
+  if (action.type === "all-in") return "A";
+  return undefined;
+}
+
 function actionLabel(action: LegalAction): string {
   return action.label;
 }
@@ -243,28 +277,37 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 function interactionLayerOpen(): boolean {
-  return Boolean(
-    document.querySelector(
-      ".el-overlay, .el-drawer, .el-popper:not([aria-hidden='true'])",
+  return Array.from(
+    document.querySelectorAll<HTMLElement>(
+      ".el-overlay, .el-drawer, .el-popper",
     ),
-  );
+  ).some((element) => {
+    const style = window.getComputedStyle(element);
+    const bounds = element.getBoundingClientRect();
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      bounds.width > 0 &&
+      bounds.height > 0
+    );
+  });
 }
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (
-    event.repeat ||
-    isTypingTarget(event.target) ||
-    interactionLayerOpen() ||
-    store.busy ||
-    store.storageLocked
-  )
-    return;
+  if (event.repeat) return;
   const key = event.key.toLowerCase();
   if (key === "escape") {
     gtoDialogOpen.value = false;
     ruleHelpOpen.value = false;
     return;
   }
+  if (
+    isTypingTarget(event.target) ||
+    interactionLayerOpen() ||
+    store.busy ||
+    store.storageLocked
+  )
+    return;
   if (key === "g") {
     gtoDialogOpen.value = true;
     return;
@@ -280,7 +323,7 @@ function handleKeydown(event: KeyboardEvent): void {
     c: legalActions.value.some((item) => item.type === "check")
       ? "check"
       : "call",
-    b: "bet",
+    b: legalActions.value.some((item) => item.type === "bet") ? "bet" : "raise",
     a: "all-in",
   };
   const action = legalActions.value.find((item) => item.type === mapped[key]);
@@ -348,7 +391,7 @@ async function proceed(): Promise<void> {
   <div v-if="store.session && hand" class="game-page">
     <div class="game-toolbar">
       <div class="game-toolbar__session">
-        <span class="game-toolbar__hand"
+        <span class="game-toolbar__hand" aria-live="polite"
           >第 {{ hand.number }} / {{ store.session.config.maxHands }} 手</span
         >
         <span class="game-toolbar__phase">{{ phaseLabel }}</span>
@@ -429,6 +472,7 @@ async function proceed(): Promise<void> {
               },
             ]"
             role="listitem"
+            :aria-label="playerAriaLabel(player)"
           >
             <div class="player-row__identity">
               <span class="player-row__avatar">{{
@@ -460,6 +504,9 @@ async function proceed(): Promise<void> {
               />
             </div>
             <div class="player-row__state">
+              <span class="player-row__semantic-state">
+                {{ playerSemanticState(player) }}
+              </span>
               <span
                 v-if="playerHandTypeVisible(player) && playerHandType(player)"
                 class="player-row__hand-type"
@@ -496,7 +543,12 @@ async function proceed(): Promise<void> {
     </div>
 
     <section class="decision-panel" aria-label="玩家操作区">
-      <div v-if="hand.phase === 'complete'" class="decision-panel__result">
+      <div
+        v-if="hand.phase === 'complete'"
+        class="decision-panel__result"
+        role="status"
+        aria-live="polite"
+      >
         <div class="decision-panel__result-copy">
           <span class="decision-panel__status">本手已结算</span>
           <strong class="decision-panel__winner">
@@ -560,6 +612,8 @@ async function proceed(): Promise<void> {
                   : 'success'
             "
             :disabled="store.busy || store.storageLocked"
+            :aria-label="`${actionLabel(action)}${actionShortcut(action) ? `，快捷键 ${actionShortcut(action)}` : ''}`"
+            :aria-keyshortcuts="actionShortcut(action)"
             @pointerdown="handlePointerDown(action, $event)"
             @pointerup="handlePointerUp(action, $event)"
             @pointercancel="cancelLongPress"
@@ -575,7 +629,10 @@ async function proceed(): Promise<void> {
           class="decision-panel__waiting-indicator"
           aria-hidden="true"
         ></span>
-        <span class="decision-panel__waiting-label"
+        <span
+          class="decision-panel__waiting-label"
+          role="status"
+          aria-live="polite"
           >{{ store.currentPlayer?.name ?? "牌桌" }} 正在行动</span
         >
       </div>
