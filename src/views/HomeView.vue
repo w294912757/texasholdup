@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
@@ -39,6 +39,11 @@ import {
 } from "@/domain/matching";
 import { gameRepository } from "@/persistence/repository";
 import type { ProgressionRecord } from "@/persistence/database";
+import {
+  buildMilestoneOverview,
+  type MilestoneOverview,
+} from "@/domain/milestones";
+import type { HandHistoryRecord } from "@/persistence/database";
 
 const store = useAppStore();
 const router = useRouter();
@@ -50,6 +55,7 @@ const presetDialogVisible = ref(false);
 const presetBusy = ref(false);
 const selectedPresetId = ref("builtin-standard");
 const progressionRecords = ref<ProgressionRecord[]>([]);
+const milestoneRecords = ref<HandHistoryRecord[]>([]);
 const downgradeTarget = ref(1);
 const form = reactive<{
   aiCount: number;
@@ -77,6 +83,11 @@ const levelOptions = computed(() =>
 const aiMatchingGuide = computed(() =>
   getAiMatchingGuide(store.account?.level ?? 1),
 );
+const milestoneOverview = computed<MilestoneOverview | null>(() =>
+  store.account
+    ? buildMilestoneOverview(store.account, milestoneRecords.value)
+    : null,
+);
 
 const presetDescriptions: Record<string, string> = {
   "builtin-standard": "满桌、标准节奏和完整提示，适合常规对局。",
@@ -97,8 +108,18 @@ watch(
     selectedPresetId.value = presetMatchesCurrent(standard)
       ? standard.id
       : "manual";
+    void loadMilestoneRecords();
   },
 );
+
+async function loadMilestoneRecords(): Promise<void> {
+  if (!store.account) return;
+  milestoneRecords.value = await gameRepository.listHandRecords(
+    store.account.id,
+  );
+}
+
+onMounted(() => void loadMilestoneRecords());
 
 function currentPresetValues(): GamePresetValues {
   return {
@@ -454,6 +475,85 @@ async function openProgression(): Promise<void> {
         >
           手动降级
         </el-button>
+      </div>
+    </section>
+
+    <section
+      v-if="milestoneOverview"
+      class="milestone-overview"
+      aria-labelledby="milestone-title"
+    >
+      <header class="milestone-overview__header">
+        <div class="milestone-overview__heading">
+          <span class="milestone-overview__eyebrow">本地成长</span>
+          <h2 id="milestone-title" class="milestone-overview__title">
+            {{ milestoneOverview.stage.label }}阶段
+          </h2>
+          <p class="milestone-overview__description">
+            {{ milestoneOverview.stage.description }}
+          </p>
+        </div>
+        <div class="milestone-overview__stage-badge">
+          <span class="milestone-overview__stage-label">历史最高等级</span>
+          <strong class="milestone-overview__stage-value">
+            Lv.{{ milestoneOverview.highestLevel }}
+          </strong>
+        </div>
+      </header>
+      <dl class="milestone-overview__metrics">
+        <div class="milestone-metric">
+          <dt>阶段手数</dt>
+          <dd>{{ milestoneOverview.stageStatistics.hands }}</dd>
+        </div>
+        <div class="milestone-metric">
+          <dt>阶段胜率</dt>
+          <dd>
+            {{ (milestoneOverview.stageStatistics.winRate * 100).toFixed(1) }}%
+          </dd>
+        </div>
+        <div class="milestone-metric">
+          <dt>阶段净盈利</dt>
+          <dd>
+            {{ milestoneOverview.stageStatistics.netProfit > 0 ? "+" : ""
+            }}{{ milestoneOverview.stageStatistics.netProfit.toLocaleString() }}
+          </dd>
+        </div>
+      </dl>
+      <div class="milestone-overview__challenge-heading">
+        <div>
+          <h3 class="milestone-overview__challenge-title">本地挑战</h3>
+          <span class="milestone-overview__challenge-summary"
+            >已完成 {{ milestoneOverview.completedChallenges }} /
+            {{ milestoneOverview.totalChallenges }}</span
+          >
+        </div>
+        <el-progress
+          class="milestone-overview__challenge-progress"
+          :percentage="Math.round(milestoneOverview.challengeCompletion * 100)"
+          :show-text="false"
+        />
+      </div>
+      <div class="milestone-overview__challenges">
+        <article
+          v-for="challenge in milestoneOverview.challenges"
+          :key="challenge.id"
+          class="milestone-challenge"
+          :class="{ 'milestone-challenge--completed': challenge.completed }"
+        >
+          <div class="milestone-challenge__copy">
+            <strong class="milestone-challenge__label">{{
+              challenge.label
+            }}</strong>
+            <span class="milestone-challenge__description">{{
+              challenge.description
+            }}</span>
+          </div>
+          <span class="milestone-challenge__progress">
+            {{ Math.min(challenge.current, challenge.target).toLocaleString() }}
+            /
+            {{ challenge.target.toLocaleString() }}
+          </span>
+        </article>
       </div>
     </section>
 

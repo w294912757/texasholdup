@@ -322,6 +322,26 @@ test("supports accessible focus order and semantic table status", async ({
   ).toBeVisible();
 });
 
+test("shows local stage and milestone progress without changing the table", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.locator(".milestone-overview")).toBeVisible();
+  await expect(page.locator(".milestone-overview__title")).toContainText(
+    "阶段",
+  );
+  await expect(page.locator(".milestone-metric")).toHaveCount(3);
+  await expect(page.locator(".milestone-challenge")).toHaveCount(6);
+  await page.setViewportSize({ width: 360, height: 640 });
+  await expect(page.locator(".milestone-overview")).toBeInViewport();
+  await page.waitForTimeout(100);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+});
+
 test("supports compact and narrow gameplay without horizontal overflow", async ({
   page,
 }) => {
