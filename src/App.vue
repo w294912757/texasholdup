@@ -17,6 +17,7 @@ import {
   Upload,
   Settings,
   HardDrive,
+  FlaskConical,
 } from "@lucide/vue";
 import { useAppStore } from "@/stores/app";
 
@@ -330,6 +331,22 @@ async function importAccount(event: unknown): Promise<void> {
               aria-hidden="true"
             />
             <span class="application-navigation__label">存储</span>
+          </button>
+          <button
+            class="application-navigation__button"
+            :class="{
+              'application-navigation__button--active': route.name === 'sandbox',
+            }"
+            type="button"
+            title="测试沙盒"
+            @click="router.push('/sandbox')"
+          >
+            <FlaskConical
+              class="application-navigation__icon"
+              :size="18"
+              aria-hidden="true"
+            />
+            <span class="application-navigation__label">沙盒</span>
           </button>
         </nav>
 
